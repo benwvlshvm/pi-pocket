@@ -11,6 +11,10 @@ import {
     SHELL_ENTRY,
     type ShellData,
 } from "./entry-format.ts";
+import type { StreamTiming } from "./timing.ts";
+
+/** Shortest first-to-last-token window, in ms, that reads as a genuine stream rather than one buffered flush. */
+const MIN_STREAM_WINDOW_MS = 250;
 
 export type ClientBlock =
     | { type: "text"; text: string }
@@ -408,6 +412,10 @@ export type ClientStats = {
     cacheRate?: number;
     /** Tokens of the newest response's prompt plus answer: roughly what the context holds. */
     contextTokens?: number;
+    /** Output tokens per second of the newest response's stream, after its first token. */
+    tokensPerSec?: number;
+    /** Time to first token of the newest response, in milliseconds. */
+    ttftMs?: number;
 };
 
 type UsageNumbers = {
@@ -448,6 +456,8 @@ export function projectStats(
 
     const prompt = input + cacheRead + cacheWrite;
     let contextTokens: number | undefined;
+    let tokensPerSec: number | undefined;
+    let ttftMs: number | undefined;
 
     for (let index = entries.length - 1; index >= 0; index--) {
         const entry = entries[index]!;
@@ -457,7 +467,8 @@ export function projectStats(
         }
 
         const message = entry.model?.[0] as
-            { usage?: UsageNumbers; stopReason?: string } | undefined;
+            | { usage?: UsageNumbers; stopReason?: string; pocketTiming?: StreamTiming }
+            | undefined;
         const used = message?.usage;
 
         if (
@@ -473,6 +484,16 @@ export function projectStats(
 
         if (total > 0) {
             contextTokens = total;
+            const timing = message?.pocketTiming;
+            if (timing?.firstTokenAt !== undefined) {
+                ttftMs = Math.max(0, timing.firstTokenAt - timing.startedAt);
+                // A response delivered in one buffered flush measures a few milliseconds of stream time and an absurd
+                // rate; only trust the speed when the window is long enough to be a real measurement.
+                const windowMs = timing.endedAt - timing.firstTokenAt;
+                if (windowMs >= MIN_STREAM_WINDOW_MS && (used.output ?? 0) > 0) {
+                    tokensPerSec = (used.output ?? 0) / (windowMs / 1000);
+                }
+            }
             break;
         }
     }
@@ -481,6 +502,8 @@ export function projectStats(
         cost,
         ...(prompt > 0 ? { cacheRate: cacheRead / prompt } : {}),
         ...(contextTokens === undefined ? {} : { contextTokens }),
+        ...(tokensPerSec === undefined ? {} : { tokensPerSec }),
+        ...(ttftMs === undefined ? {} : { ttftMs }),
     };
 }
 

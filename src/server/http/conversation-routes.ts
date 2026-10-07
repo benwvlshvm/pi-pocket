@@ -9,7 +9,7 @@ import { HttpError } from "../errors.ts";
 import { serveImage, TYPES } from "./assets.ts";
 import { type ApiRequest, json, readJson, send } from "./io.ts";
 
-const MAX_UPLOAD = 50 * 1024 * 1024;
+const MAX_UPLOAD = 500 * 1024 * 1024;
 
 const ENTRY_IMAGE_TYPES = new Set([
     "image/png",
@@ -385,7 +385,7 @@ export async function conversationRoutes(
         app.requireSteer(user);
 
         if (Number(request.headers["content-length"] ?? 0) > MAX_UPLOAD) {
-            throw new HttpError(413, "Files can be up to 50 MB");
+            throw new HttpError(413, "Files can be up to 500 MB");
         }
 
         await app.conversation(id);
@@ -402,7 +402,7 @@ export async function conversationRoutes(
             size += chunk.length;
 
             if (size > MAX_UPLOAD) {
-                request.destroy(new HttpError(413, "Files can be up to 50 MB"));
+                request.destroy(new HttpError(413, "Files can be up to 500 MB"));
             }
         });
 

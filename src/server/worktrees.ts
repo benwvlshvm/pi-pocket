@@ -20,7 +20,7 @@ export type Worktree = {
 };
 
 /** How many bytes of new files a new worktree gets, all together; any file that would go past it is left out. */
-const MAX_COPIED_BYTES = 50 * 1024 * 1024;
+const MAX_COPIED_BYTES = 500 * 1024 * 1024;
 
 /** The top folder of the repository `cwd` is in, or undefined when it is in none. */
 async function repositoryOf(cwd: string): Promise<string | undefined> {

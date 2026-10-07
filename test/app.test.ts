@@ -1517,7 +1517,7 @@ test("the web edge: page policy, local redirects, asked account switches, no cro
                 headers: {
                     authorization: `Bearer ${ownerToken}`,
                     "x-pocket": "1",
-                    "content-length": String(60 * 1024 * 1024),
+                    "content-length": String(510 * 1024 * 1024),
                 },
             });
 
