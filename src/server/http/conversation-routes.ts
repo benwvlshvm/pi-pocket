@@ -1,15 +1,15 @@
 /** `/api/c/:id`: one conversation's routes, for people the API has checked may see it. */
+// No upload size cap (Ben's request, 2026-10-08): Tailscale-only + authed, disk is the only bound.
 import { randomUUID } from "node:crypto";
-import { createWriteStream, rmSync } from "node:fs";
+import { createWriteStream, rmSync, statSync } from "node:fs";
 import { basename, extname, join, resolve, sep } from "node:path";
 import { pipeline } from "node:stream/promises";
 import type { ConversationId } from "@earendil-works/pi-durable";
 import type { Attachment, SubmitRequest } from "../commands.ts";
 import { HttpError } from "../errors.ts";
+import { gather } from "../insights.ts";
 import { serveImage, TYPES } from "./assets.ts";
 import { type ApiRequest, json, readJson, send } from "./io.ts";
-
-const MAX_UPLOAD = 500 * 1024 * 1024;
 
 const ENTRY_IMAGE_TYPES = new Set([
     "image/png",
@@ -309,6 +309,11 @@ export async function conversationRoutes(
         });
     }
 
+    // What /context and /skills show: the system prompt Pi last sent, usage, and the loaded skills.
+    if (third === "insights" && method === "GET") {
+        return json(response, 200, await gather(app, id));
+    }
+
     // Prompt templates and skills, for the message box's slash commands.
     if (third === "prompts" && method === "GET") {
         const templates = app.promptTemplates(id).map(({ name, description, argumentHint }) => ({
@@ -384,10 +389,6 @@ export async function conversationRoutes(
     if (third === "upload" && method === "POST") {
         app.requireSteer(user);
 
-        if (Number(request.headers["content-length"] ?? 0) > MAX_UPLOAD) {
-            throw new HttpError(413, "Files can be up to 500 MB");
-        }
-
         await app.conversation(id);
         const name = safeName(url.searchParams.get("name") ?? "upload");
         const directory = app.workspace.uploadDirectory(id);
@@ -396,16 +397,6 @@ export async function conversationRoutes(
             directory,
             `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}-${name}`,
         );
-        let size = 0;
-
-        request.on("data", (chunk: Buffer) => {
-            size += chunk.length;
-
-            if (size > MAX_UPLOAD) {
-                request.destroy(new HttpError(413, "Files can be up to 500 MB"));
-            }
-        });
-
         try {
             await pipeline(request, createWriteStream(file, { mode: 0o600, flags: "wx" }));
         } catch (error) {
@@ -430,7 +421,7 @@ export async function conversationRoutes(
             path: file,
             name,
             mime: mime.split(";")[0]!.trim(),
-            size,
+            size: statSync(file).size,
         };
 
         return json(response, 200, attachment);

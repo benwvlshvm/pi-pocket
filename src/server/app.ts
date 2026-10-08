@@ -10,6 +10,7 @@ import { rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { getCurrentSystemPrompt } from "@earendil-works/pi-ai/utils/transcript";
 import { getAgentDir, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import {
     AgentDoc,
@@ -20,6 +21,8 @@ import {
     type Cursor,
     createRegistry,
     defineExtension,
+    GenerationTask,
+    hook,
     type DocumentCommitChange,
     Harness,
     type HarnessSettings,
@@ -58,6 +61,8 @@ import { describe, HttpError } from "./errors.ts";
 import { Goals } from "./goals.ts";
 import { type ApprovalRequest, Approvals, type PocketHost } from "./host.ts";
 import { type GuardStatus, LancetGuard } from "./lancet.ts";
+import { PromptCapture, type CapturedPrompt } from "./insights.ts";
+import { Questions } from "./questions.ts";
 import { takeLock } from "./lock.ts";
 import { modelList, resolveModel } from "./models.ts";
 import { configureHttp } from "./net.ts";
@@ -68,6 +73,7 @@ import {
     type PromptTemplate,
     type SkillCommand,
 } from "./prompts.ts";
+import { measureModelStreams } from "./timing.ts";
 import { Providers } from "./providers.ts";
 import { PushStore } from "./push.ts";
 import { type ExtensionInfo, ExtensionLoader, prepareDropInFolder } from "./reload.ts";
@@ -116,6 +122,9 @@ export class PocketApp {
     /** Push subscriptions and their keys; undefined until the server opened. */
     pushStore: PushStore | undefined;
     readonly approvals = new Approvals((id) => this.attribution.requesterOf(id));
+    readonly questions = new Questions();
+    /** The system prompt Pi last sent per conversation, for the /context panel. */
+    readonly prompts = new PromptCapture();
     readonly guard = new LancetGuard();
     readonly dataDir: string;
     readonly defaultCwd: string;
@@ -158,6 +167,7 @@ export class PocketApp {
     #sessions: Record<string, SessionMeta> = {};
     #sessionsTimer: NodeJS.Timeout | undefined;
     #unsubscribeCommits: (() => void) | undefined;
+    #unsubscribeQuestions: (() => void) | undefined;
     #unsubscribeApprovals: (() => void) | undefined;
     #unsubscribeBrowsers: (() => void) | undefined;
     #lockFile: string;
@@ -246,6 +256,7 @@ export class PocketApp {
 
         this.models = await ModelRuntime.create();
         this.#configureModels?.(this.models);
+        measureModelStreams(this.models);
         await this.models.getAvailable().catch(() => []);
 
         const registry = createRegistry();
@@ -253,11 +264,36 @@ export class PocketApp {
         registry.install(CodingTools);
         // Durable work of the app itself, whatever extension modules are on.
         registry.install(
-            defineExtension({ name: "pocket-core", tasks: [ResendTask, this.shell.task] }),
+            defineExtension({
+                name: "pocket-core",
+                tasks: [ResendTask, this.shell.task],
+                hooks: [
+                    // What /context shows: the system prompt exactly as a request carried it.
+                    hook(GenerationTask, {
+                        beforeRequest: (request, api) => {
+                            // The system prompt rides in positional pi.system entries; this replays them the way the
+                            // provider receives it.
+                            const text = getCurrentSystemPrompt(request.messages);
+
+                            if (text !== "") {
+                                const captured: CapturedPrompt = {
+                                    text,
+                                    messages: request.messages.length,
+                                    at: Date.now(),
+                                };
+                                this.prompts.capture(api.conversationId, captured);
+                            }
+
+                            return undefined;
+                        },
+                    }),
+                ],
+            }),
         );
         const host: PocketHost = {
             guard: this.guard,
             approvals: this.approvals,
+            questions: this.questions,
             agentDir: getAgentDir(),
             dataDir: this.dataDir,
             skillPaths: () => {
@@ -318,6 +354,9 @@ export class PocketApp {
         this.#unsubscribeCommits = this.harness.subscribeCommits((publication) =>
             this.#committed(publication),
         );
+        this.#unsubscribeQuestions = this.questions.subscribe((id) => {
+            void this.#rooms.get(id)?.then((room) => room.schedule(), () => {});
+        });
         this.#unsubscribeApprovals = this.approvals.subscribe((id) => {
             void this.#rooms.get(id)?.then(
                 (room) => room.schedule(),
@@ -1270,6 +1309,18 @@ export class PocketApp {
             : undefined;
     }
 
+    /** A person's answers to a pending question; false when the question is gone. */
+    async answerQuestion(id: string, answers: string[], user: User): Promise<boolean> {
+        this.requireSteer(user);
+        const question = this.questions.all().find((each) => each.id === id);
+
+        if (question === undefined || !this.canSee(user, question.conversationId)) {
+            return false;
+        }
+
+        return this.questions.answer(id, { answers, by: user.name });
+    }
+
     async answerApproval(id: string, allow: boolean, user: User): Promise<boolean> {
         this.requireSteer(user);
         const request = this.approvals.all().find((each) => each.id === id);
@@ -1684,6 +1735,7 @@ export class PocketApp {
             this.alerts.close();
             this.spend.close();
             this.#unsubscribeCommits?.();
+            this.#unsubscribeQuestions?.();
             this.#unsubscribeApprovals?.();
             this.#unsubscribeBrowsers?.();
             this.loader?.close();

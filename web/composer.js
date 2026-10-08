@@ -1197,12 +1197,6 @@ function StatusLine() {
         );
     }
 
-    parts.push(
-        html`<span title=${(view.viewers ?? []).join(", ")}>
-            ${view.clients} client${view.clients === 1 ? "" : "s"}
-        </span>`,
-    );
-
     // Speed of the newest response: its tokens per second and its time to first token.
     if (stats.tokensPerSec !== undefined) {
         parts.push(
@@ -1230,17 +1224,6 @@ function StatusLine() {
 
         parts.push(html`<span>${percent}%/${formatTokens(window)}</span>`);
     }
-
-    // The session's spend, its subagents' included, and its limit when it has one.
-    const spend = view.conversation?.spend;
-    const spent = spend?.spent ?? stats.cost ?? 0;
-
-    parts.push(
-        html`<span class=${spend?.budget !== undefined && spent >= spend.budget ? "warn" : ""}>
-            $${spent.toFixed(2)}
-            ${spend?.budget !== undefined ? `/$${spend.budget.toFixed(2)}` : ""}
-        </span>`,
-    );
 
     // On but not loaded: the guard blocks bash, write, and edit until it loads or is turned off.
     if (guard?.enabled && guard.available === false) {

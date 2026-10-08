@@ -286,14 +286,16 @@ function Thought({ block, streaming }) {
     </div>`;
 }
 
-function ToolCard({ call, result, slot, approval, entryId }) {
+function ToolCard({ call, result, slot, approval, question, entryId }) {
     const [open, setOpen] = useState(false);
     const [full, setFull] = useState(null);
     const view = store.state.view;
     const meta = describeCall(full?.call ?? call);
     const status = approval
         ? "approval"
-        : result
+        : question
+          ? "question"
+          : result
           ? result.isError
               ? "error"
               : "done"
@@ -485,7 +487,9 @@ function ToolCard({ call, result, slot, approval, entryId }) {
                         ? html`<${Spinner} />`
                         : status === "approval"
                           ? html`<${Icon} name="shield" size=${15} />`
-                          : status === "error"
+                          : status === "question"
+                            ? "?"
+                            : status === "error"
                             ? "!"
                             : "✓"
                 }
@@ -595,7 +599,68 @@ function ApprovalCard({ approval }) {
     </div>`;
 }
 
-function AssistantBlocks({ blocks, entryId, results, slots, approvals, streaming }) {
+/** A questionnaire Pi is waiting on: tap an option or type an answer, and the call returns it. */
+function QuestionCard({ question }) {
+    const [answers, setAnswers] = useState(() => question.questions.map(() => ""));
+    const [busy, setBusy] = useState(false);
+
+    const submit = (next) => {
+        setBusy(true);
+        attempt(() => actions.answerQuestion(question.id, next)).finally(() => setBusy(false));
+    };
+
+    const ready = answers.every((answer) => answer.trim() !== "");
+    const set = (index, value) => {
+        const next = answers.map((each, i) => (i === index ? value : each));
+
+        setAnswers(next);
+        // A single choice question answers itself on the tap.
+        if (question.questions.length === 1 && next[0].trim() !== "") {
+            submit(next);
+        }
+    };
+
+    return html`<div class="approval question">
+        <div class="approval-head"><${Icon} name="chat" size=${16} /> Pi asks:</div>
+        ${question.questions.map(
+            (each, index) => html`<div class="question-item" key=${index}>
+                <div class="approval-reason">${each.question}</div>
+                ${
+                    each.options?.length > 0 &&
+                    html`<div class="question-options">
+                        ${each.options.map(
+                            (option) => html`<button
+                                class=${`chip ${answers[index] === option ? "on" : ""}`}
+                                disabled=${busy}
+                                onClick=${() => set(index, option)}
+                            >
+                                ${option}
+                            </button>`,
+                        )}
+                    </div>`
+                }
+                <input
+                    class="question-custom"
+                    placeholder="Type your own answer…"
+                    disabled=${busy}
+                    value=${answers[index]}
+                    onInput=${(event) =>
+                        setAnswers(answers.map((answer, i) => (i === index ? event.currentTarget.value : answer)))}
+                />
+            </div>`,
+        )}
+        ${
+            question.questions.length > 1 &&
+            html`<div class="approval-actions">
+                <button class="button primary" disabled=${busy || !ready} onClick=${() => submit(answers)}>
+                    Answer
+                </button>
+            </div>`
+        }
+    </div>`;
+}
+
+function AssistantBlocks({ blocks, entryId, results, slots, approvals, questions, streaming }) {
     return blocks.map((block, index) => {
         if (block.type === "text") {
             // The block still growing changes on every update: caching each version would only push out finished ones.
@@ -621,12 +686,17 @@ function AssistantBlocks({ blocks, entryId, results, slots, approvals, streaming
                 slot?.taskId === undefined
                     ? undefined
                     : approvals.find((each) => each.taskId === slot.taskId);
+            const question =
+                slot?.taskId === undefined
+                    ? undefined
+                    : questions?.find((each) => each.taskId === slot.taskId);
 
             return html`<${ToolCard}
                 call=${block}
                 result=${results.get(block.id)}
                 slot=${slot}
                 approval=${approval}
+                question=${question}
                 entryId=${entryId}
             />`;
         }
@@ -705,7 +775,7 @@ function AnswerActions({ entry }) {
     </div>`;
 }
 
-function AssistantEntry({ entry, results, slots, approvals }) {
+function AssistantEntry({ entry, results, slots, approvals, questions }) {
     // A final answer (not a step between tool calls) with something to say gets reactions and the discuss row.
     const answer =
         collab() &&
@@ -719,6 +789,7 @@ function AssistantEntry({ entry, results, slots, approvals }) {
             results=${results}
             slots=${slots}
             approvals=${approvals}
+            questions=${questions}
         />
         ${
             entry.stopReason === "error" &&
@@ -910,7 +981,7 @@ function PendingShells({ conversationId, rows }) {
     );
 }
 
-function EntryView({ entry, results, slots, approvals }) {
+function EntryView({ entry, results, slots, approvals, questions }) {
     const { view, users } = store.state;
 
     if (entry.kind === "shell") {
@@ -931,6 +1002,7 @@ function EntryView({ entry, results, slots, approvals }) {
             results=${results}
             slots=${slots}
             approvals=${approvals}
+            questions=${questions}
         />`;
     }
 
@@ -1018,12 +1090,13 @@ class Row extends Component {
         );
     }
 
-    render({ entry, results, slots, approvals }) {
+    render({ entry, results, slots, approvals, questions }) {
         return html`<${EntryView}
             entry=${entry}
             results=${results}
             slots=${slots}
             approvals=${approvals}
+            questions=${questions}
         />`;
     }
 }
@@ -1200,6 +1273,7 @@ export function Transcript() {
 
     const slots = new Map((view.live.tools ?? []).map((slot) => [slot.callId, slot]));
     const approvals = view.approvals ?? [];
+    const questions = view.questions ?? [];
     const first = entries[0];
     const partial = view.live.generation?.message?.blocks ?? [];
     const runningTools = (view.live.tools ?? []).some((slot) => slot.status !== "done");
@@ -1261,6 +1335,7 @@ export function Transcript() {
                     results=${results}
                     slots=${slots}
                     approvals=${approvals}
+                    questions=${questions}
                     deps=${rowDeps(entry, results, slots, approvals)}
                 />`,
             )}
@@ -1273,12 +1348,16 @@ export function Transcript() {
                         results=${results}
                         slots=${slots}
                         approvals=${approvals}
+                        questions=${questions}
                         streaming=${true}
                     />
                 </div>`
             }
             ${approvals.map(
                 (approval) => html`<${ApprovalCard} key=${approval.id} approval=${approval} />`,
+            )}
+            ${(view.questions ?? []).map(
+                (question) => html`<${QuestionCard} key=${question.id} question=${question} />`,
             )}
             ${
                 retry &&

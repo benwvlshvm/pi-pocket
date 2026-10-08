@@ -302,6 +302,12 @@ const COMMANDS = [
     },
     { name: "session", description: "Show the model, context use, and cost", run: showSession },
     {
+        name: "context",
+        description: "Inspect the system prompt, usage, and context",
+        run: () => openSheet({ type: "insights", focus: "context" }),
+    },
+
+    {
         name: "export",
         description: "Download this conversation as Markdown",
         run: () => location.assign(`/api/c/${store.state.view.conversation.id}/export`),

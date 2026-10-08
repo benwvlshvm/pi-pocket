@@ -8,6 +8,7 @@ import { BranchPicker } from "./sheets/branch.js";
 import { ExtensionsSheet } from "./sheets/extensions.js";
 import { FileSheet } from "./sheets/file.js";
 import { FindSheet } from "./sheets/find.js";
+import { InsightsSheet } from "./sheets/insights.js";
 import { CwdSheet } from "./sheets/folder.js";
 import { MenuSheet, PlacesSheet } from "./sheets/menu.js";
 import { MessageSheet } from "./sheets/message.js";
@@ -132,6 +133,9 @@ function sheetBody(sheet) {
             break;
         case "extensions":
             body = html`<${ExtensionsSheet} />`;
+            break;
+        case "insights":
+            body = html`<${InsightsSheet} focus=${sheet.focus} />`;
             break;
         case "image":
             body = html`<${ImageViewer} src=${sheet.src} alt=${sheet.alt} />`;

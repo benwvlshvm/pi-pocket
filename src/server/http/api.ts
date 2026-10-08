@@ -312,6 +312,20 @@ export function createApi(options: HttpOptions, auth: Auth) {
             return conversationRoutes(route, id, parts);
         }
 
+        if (first === "questions" && second !== undefined && method === "POST") {
+            const body = await readJson<{ answers?: unknown }>(request);
+
+            if (!Array.isArray(body.answers) || body.answers.some((each) => typeof each !== "string")) {
+                throw new HttpError(400, "answers must be a list of strings");
+            }
+
+            if (!(await app.answerQuestion(second, body.answers as string[], user))) {
+                throw new HttpError(404, "That question is no longer pending");
+            }
+
+            return json(response, 200, { ok: true });
+        }
+
         if (first === "approvals" && second !== undefined && method === "POST") {
             const body = await readJson<{ allow?: boolean }>(request);
 

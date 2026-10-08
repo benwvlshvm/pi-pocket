@@ -20,6 +20,16 @@ export function uid() {
 export const TRANSCRIPT_ROWS = 60;
 
 const TAB_KEY = "pocket.tab";
+const UNREAD_KEY = "pocket.unread";
+
+/** Sessions this browser has marked unread, like the pinned list beside it (`pocket.unread`). */
+function unreadOf() {
+    try {
+        return JSON.parse(localStorage.getItem(UNREAD_KEY) ?? "[]") ?? [];
+    } catch {
+        return [];
+    }
+}
 
 const TAB = sessionStorage.getItem(TAB_KEY) ?? uid();
 
@@ -36,6 +46,7 @@ const emptyView = () => ({
     clients: 0,
     viewers: [],
     approvals: [],
+    questions: [],
     artifacts: [],
     subagents: [],
     authors: {},
@@ -61,6 +72,8 @@ export const store = {
         sessionsLoaded: false,
         /** Sessions on their way into the archive (true) or out of it (false), by id, until the list catches up (`sessions.js`). */
         moving: {},
+        /** Sessions marked unread in this browser: an id each, until opened again. */
+        unread: unreadOf(),
         conversationId: routeConversation(),
         view: emptyView(),
         ...peopleFor(routeConversation()),
@@ -117,6 +130,20 @@ export const store = {
         return () => this.listeners.delete(listener);
     },
 };
+
+// ─── Marked-unread sessions (this browser) ──────────────────────────────────────
+
+export const isUnread = (id) => store.state.unread.includes(id);
+
+/** Mark a session unread, or clear it again, in this browser only. Opening the session clears it (`navigate`). */
+export function setUnread(id, unread) {
+    const next = unread
+        ? [...new Set([...store.state.unread, id])]
+        : store.state.unread.filter((each) => each !== id);
+
+    localStorage.setItem(UNREAD_KEY, JSON.stringify(next));
+    store.set({ unread: next });
+}
 
 function routeConversation() {
     const match = /^\/s\/(\d+)/.exec(location.pathname);
@@ -349,6 +376,7 @@ function applyView(data) {
                 clients: data.clients,
                 viewers: data.viewers,
                 approvals: data.approvals,
+                questions: data.questions ?? base.questions,
                 // The server sends these again only when they change: a missing one keeps its last value.
                 artifacts: data.artifacts ?? base.artifacts,
                 subagents: data.subagents ?? base.subagents,
@@ -700,8 +728,19 @@ export function navigate(conversationId, { replace = false, sheet = null } = {})
         return;
     }
 
+    // Opening a session is reading it: its marked-unread dot goes, here and in the list.
+    const unread =
+        conversationId === null
+            ? store.state.unread
+            : store.state.unread.filter((each) => each !== conversationId);
+
+    if (unread.length !== store.state.unread.length) {
+        localStorage.setItem(UNREAD_KEY, JSON.stringify(unread));
+    }
+
     store.set((state) => ({
         conversationId,
+        unread,
         view: emptyView(),
         ...peopleFor(conversationId),
         browser: null,
@@ -818,6 +857,7 @@ export const actions = {
     removeWorktree: (force) => api(`c/${current()}/worktree`, { remove: true, force }),
     clearGoal: () => api(`c/${current()}/goal`, { clear: true }),
     approve: (id, allow) => api(`approvals/${encodeURIComponent(id)}`, { allow }),
+    answerQuestion: (id, answers) => api(`questions/${encodeURIComponent(id)}`, { answers }),
     /** `worktree`: the session works in a git worktree of its own, made from the folder. */
     createSession: (cwd, { worktree = false } = {}) =>
         api("sessions", { cwd, ...(worktree ? { worktree } : {}) }),

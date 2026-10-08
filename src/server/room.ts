@@ -473,6 +473,7 @@ export class Room {
             clients: [...new Set([...this.clients].map((each) => each.id))].length,
             viewers: [...new Set([...this.clients].map((each) => each.user.name))],
             approvals: this.#app.approvals.forConversation(this.id),
+            questions: this.#app.questions.forConversation(this.id),
             ...fields,
         });
     }

@@ -7,11 +7,13 @@ import {
     actions,
     canSteer,
     collab,
+    isUnread,
     navigate,
     notify,
     openSheet,
     scoped,
     sessionUnread,
+    setUnread,
     stillMoving,
     store,
 } from "./store.js";
@@ -207,6 +209,7 @@ function Highlight({ text, needle }) {
 function SessionRow({ session, index, number, needle, selected, onPick, onSelect }) {
     const { conversationId, server, me } = store.state;
     const pinned = isPinned(session.id);
+    const marked = isUnread(session.id);
     const unread = collab() && sessionUnread(session);
     const moving = store.state.moving[session.id] !== undefined;
     const state = selected
@@ -223,7 +226,7 @@ function SessionRow({ session, index, number, needle, selected, onPick, onSelect
         : [];
 
     return html`<div
-        class=${`session-row ${session.id === conversationId ? "active" : ""} ${selected ? "selected" : ""} ${moving ? "moving" : ""}`}
+        class=${`session-row ${session.id === conversationId ? "active" : ""} ${selected ? "selected" : ""} ${moving ? "moving" : ""} ${marked ? "marked-unread" : ""}`}
         data-id=${session.id}
         style=${`--i:${index}`}
     >
@@ -254,7 +257,13 @@ function SessionRow({ session, index, number, needle, selected, onPick, onSelect
                 </span>
             </span>
             <span class="session-side">
-                ${unread && html`<span class="unread-dot" title="New chat messages"></span>`}
+                ${
+                    (unread || marked) &&
+                    html`<span
+                        class="unread-dot"
+                        title=${marked ? "Marked unread" : "New chat messages"}
+                    ></span>`
+                }
                 <span class="session-time">${timeAgo(session.updatedAt)}</span>
                 ${
                     number !== undefined &&
@@ -291,6 +300,14 @@ function SessionRow({ session, index, number, needle, selected, onPick, onSelect
                 onClick=${() => togglePin(session.id)}
             >
                 <${Icon} name="pin" size=${14} />
+            </button>
+            <button
+                class=${`session-act session-unread ${marked ? "on" : ""}`}
+                title=${marked ? "Mark read" : "Mark unread"}
+                aria-label=${marked ? "Mark read" : "Mark unread"}
+                onClick=${() => setUnread(session.id, !marked)}
+            >
+                <${Icon} name=${marked ? "check" : "unread"} size=${14} />
             </button>
         </span>
     </div>`;
@@ -924,7 +941,10 @@ export function Rail() {
                     onClick=${() => navigate(session.id)}
                 >
                     ${index < 9 ? index + 1 : initials(session.title ?? "New session")}
-                    ${collab() && sessionUnread(session) && html`<span class="unread-dot"></span>`}
+                    ${
+                        ((collab() && sessionUnread(session)) || isUnread(session.id)) &&
+                        html`<span class="unread-dot"></span>`
+                    }
                 </button>`,
             )}
         </div>

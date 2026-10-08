@@ -16,6 +16,7 @@ import {
     notify,
     openSheet,
     scoped,
+    setUnread,
     store,
 } from "../store.js";
 import { isPinned, paletteOf, togglePin } from "../theme.js";
@@ -173,6 +174,18 @@ export function MenuSheet() {
                     closeSheet();
                 },
                 "this browser",
+            )
+        }
+        ${
+            session &&
+            item(
+                "Mark unread",
+                () => {
+                    setUnread(conversation.id, true);
+                    closeSheet();
+                    navigate(null);
+                },
+                "this browser; opening it again clears it",
             )
         }
         ${

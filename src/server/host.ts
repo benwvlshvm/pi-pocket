@@ -4,6 +4,7 @@ import type { ConversationId, Extension, ModelRef, TaskId } from "@earendil-work
 import type { Browsers } from "./browser.ts";
 import type { Goals } from "./goals.ts";
 import type { LancetGuard } from "./lancet.ts";
+import type { Questions } from "./questions.ts";
 import type { Schedules } from "./schedules.ts";
 
 export interface ApprovalRequest {
@@ -107,6 +108,8 @@ export class Approvals {
 export interface PocketHost {
     readonly guard: LancetGuard;
     readonly approvals: Approvals;
+    /** Questions Pi asks the session's people: the questionnaire tool waits on these. */
+    readonly questions: Questions;
     readonly agentDir: string;
     readonly dataDir: string;
     /** Pi's configured extra skill paths, from its settings. */

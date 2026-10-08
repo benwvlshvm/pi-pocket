@@ -42,3 +42,24 @@ test("responses without a timing stamp show nothing rather than guessing", () =>
 	assert.equal(stats.tokensPerSec, undefined);
 	assert.equal(stats.ttftMs, undefined);
 });
+
+test("averages cover the newest responses, weighted by their length", () => {
+	const stats = projectStats(undefined, [
+		assistant({ input: 10, output: 100, cacheRead: 0, cacheWrite: 0 }, { startedAt: 0, firstTokenAt: 1000, endedAt: 3000 }),
+		assistant({ input: 10, output: 50, cacheRead: 0, cacheWrite: 0 }, { startedAt: 10, firstTokenAt: 110, endedAt: 610 }),
+	]);
+	// 100 tokens over 2s and 50 over 0.5s: 150 tokens over 2.5s.
+	assert.equal(stats.avgTokensPerSec, 60);
+	assert.equal(stats.avgSamples, 2);
+	assert.equal(stats.avgTtftMs, 550);
+	assert.equal(stats.tokensPerSec, 100);
+	assert.equal(stats.ttftMs, 100);
+});
+
+test("a buffered flush counts for the averages neither", () => {
+	const stats = projectStats(undefined, [
+		assistant({ input: 10, output: 24, cacheRead: 0, cacheWrite: 0 }, { startedAt: 0, firstTokenAt: 1098, endedAt: 1099 }),
+	]);
+	assert.equal(stats.avgTokensPerSec, undefined);
+	assert.equal(stats.avgSamples, undefined);
+});
