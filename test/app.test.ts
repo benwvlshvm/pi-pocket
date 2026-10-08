@@ -1789,24 +1789,8 @@ test("the web edge: page policy, local redirects, asked account switches, no cro
             () => readdirSync(join(uploads, String(id))).length === before,
             "the cut-off upload to be removed",
         );
-        const declared = await new Promise<number>((resolve) => {
-            const huge = rawRequest({
-                port,
-                method: "POST",
-                path: `/api/c/${id}/upload?name=huge.bin`,
-                headers: {
-                    authorization: `Bearer ${ownerToken}`,
-                    "x-pocket": "1",
-                    "content-length": String(510 * 1024 * 1024),
-                },
-            });
-
-            huge.on("response", (response) => resolve(response.statusCode ?? 0));
-            huge.on("error", () => resolve(-1));
-            huge.write("x");
-        });
-
-        assert.equal(declared, 413, "an upload declared too big is refused before it is read");
+        // No size cap to refuse (Ben's request, 2026-10-08): a huge declared body is simply read, so the
+        // cut-off case above is the only rejection there is.
         // Two pasted images, both image.png, at the same moment: two files.
         const paste = () =>
             fetch(`${base}/api/c/${id}/upload?name=image.png`, {
