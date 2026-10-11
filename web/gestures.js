@@ -45,10 +45,11 @@ function speedOf(samples) {
 
 /**
  * Drag `ref`'s element to close it: `"down"` for a sheet from the bottom edge, `"left"` for the drawer. It follows the
- * finger and dims the scrim behind it (its parent) as it goes. Let go far or fast enough, it calls `onClose` and stays
- * where the finger left it, for its closing animation to go on from there; otherwise it springs back. Only on touch.
+ * finger and dims the scrim behind it (its parent, or the `scrim` ref's element) as it goes. Let go far or fast enough,
+ * it calls `onClose` and stays where the finger left it, for its closing animation to go on from there; otherwise it
+ * springs back. Only on touch.
  */
-export function useDragToClose(ref, { dir, onClose, enabled = true }) {
+export function useDragToClose(ref, { dir, onClose, enabled = true, scrim: scrimRef }) {
     const close = useRef(onClose);
 
     close.current = onClose;
@@ -60,7 +61,8 @@ export function useDragToClose(ref, { dir, onClose, enabled = true }) {
         }
 
         const down = dir === "down";
-        const scrim = element.parentElement;
+        // PiP's sheet has a scrim beside it, not around it: dimming its parent would dim the whole app.
+        const scrim = scrimRef?.current ?? element.parentElement;
         let start = null;
         let dragging = false;
         let samples = [];
@@ -194,11 +196,13 @@ export function useDragToClose(ref, { dir, onClose, enabled = true }) {
             if (dragging) {
                 element.style.transform = "";
                 element.style.transition = "";
-                scrim.style.opacity = "";
-                scrim.style.transition = "";
             }
+
+            // The scrim may outlive the element: it never stays dimmed by a drag that closed it.
+            scrim.style.opacity = "";
+            scrim.style.transition = "";
         };
-    }, [ref.current, dir, enabled]);
+    }, [ref.current, dir, enabled, scrimRef?.current]);
 }
 
 // ─── Marks that follow a swipe ────────────────────────────────────────────────────
@@ -374,8 +378,9 @@ function scrollsSideways(target, root) {
  * One-handed swipes on a phone, with passive listeners so scrolling never waits on them. On the conversation, sideways:
  * right goes back, left opens a place (the Files tile), each with a mark that follows the finger and lights when
  * letting go would act; the conversation leans a little the same way. In the Files tile, right goes back too. Up from
- * the message box (not its text) opens the places. `swipes(where)` says, when a touch starts on `"conversation"` or
- * `"files"`, what each does now: `{ right, left }` as `{ path, label, run }`, and `up` as a function, or none.
+ * the message box (not its text, nor the queue and bars above it) opens the places; on the subagents board, right goes
+ * back. `swipes(where)` says, when a touch starts on `"conversation"`, `"files"`, or `"board"`, what each does now:
+ * `{ right, left }` as `{ path, label, run }`, and `up` as a function, or none.
  */
 export function startSwipes(swipes) {
     let swipe = null;
@@ -419,8 +424,16 @@ export function startSwipes(swipes) {
                 return;
             }
 
-            const root = target.closest?.(".pane > .scroller, .files-tile:not(.leaving)");
-            const acts = swipes(root?.classList.contains("files-tile") ? "files" : "conversation");
+            const root = target.closest?.(
+                ".pane > .scroller, .files-tile:not(.leaving), .board.phone",
+            );
+            const acts = swipes(
+                root?.classList.contains("files-tile")
+                    ? "files"
+                    : root?.classList.contains("board")
+                      ? "board"
+                      : "conversation",
+            );
             const at = {
                 x: touch.clientX,
                 y: touch.clientY,
@@ -439,7 +452,12 @@ export function startSwipes(swipes) {
                 !getSelection()?.toString()
             ) {
                 swipe = { ...at, root };
-            } else if (acts.up && target.closest?.(".composer-wrap")) {
+            } else if (
+                acts.up &&
+                target.closest?.(".composer-wrap") &&
+                // Above the box, the queue and the subagents list scroll: a finger there scrolls them.
+                !target.closest(".dock")
+            ) {
                 swipe = { ...at, root: null, up: true };
             }
         },

@@ -59,12 +59,16 @@ interface PocketConfig {
     /** Invites not yet used: kept here so one that lasts a day or a week outlives a restart. */
     invites?: StoredInvite[];
     lastModel?: ModelChoice;
+    /** The model and thinking level new sessions start with, as the owner chose; absent: the last one picked. */
+    defaultModel?: ModelChoice;
     /** Extension modules (file names in `src/server/extensions/`) the owner turned off. */
     disabledExtensions?: string[];
     /** Extension modules the owner turned on. Matters for modules that are off by default, like Lancet Guard. */
     enabledExtensions?: string[];
     /** "others": a guest cannot allow a risky call that their own message led to. Absent: anyone who can steer may. */
     approvals?: ApprovalRule;
+    /** The tokens of context above which PiP compacts itself once idle; 0: only as sessions do. Absent: the default. */
+    pipCompactAt?: number;
 }
 
 /** Who may allow a risky tool call: anyone who can steer, or (for guests) only someone other than who asked. */
@@ -133,6 +137,35 @@ export class ConfigStore {
 
     set lastModel(choice: ModelChoice | undefined) {
         this.#config.lastModel = choice;
+        this.save();
+    }
+
+    get defaultModel(): ModelChoice | undefined {
+        return this.#config.defaultModel;
+    }
+
+    set defaultModel(choice: ModelChoice | undefined) {
+        if (choice === undefined) {
+            delete this.#config.defaultModel;
+        } else {
+            this.#config.defaultModel = choice;
+        }
+
+        this.save();
+    }
+
+    /** The owner's choice of when PiP compacts itself (`pip-compact.ts`); undefined: its default. */
+    get pipCompactAt(): number | undefined {
+        return this.#config.pipCompactAt;
+    }
+
+    set pipCompactAt(tokens: number | undefined) {
+        if (tokens === undefined) {
+            delete this.#config.pipCompactAt;
+        } else {
+            this.#config.pipCompactAt = tokens;
+        }
+
         this.save();
     }
 

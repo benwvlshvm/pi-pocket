@@ -6,8 +6,10 @@ import { browserAvailable, toggleBrowser } from "./browser.js";
 import { planAvailable, schedulesAvailable } from "./commands.js";
 import { filesAvailable, toggleFiles } from "./files-panel.js";
 import { togglePeeks } from "./peeks.js";
+import { openPip, pipAvailable } from "./pip.js";
 import { setArchived, workspaceOrder } from "./sessions.js";
 import { branchAvailable, headLabel } from "./sheets/branch.js";
+import { piSessionsAvailable } from "./sheets/pi-sessions.js";
 import {
     actions,
     attempt,
@@ -93,6 +95,12 @@ function actionItems() {
             keys: "Alt N",
             run: () => openSheet({ type: "cwd", mode: "new" }),
         },
+        piSessionsAvailable() && {
+            label: "Continue a Pi session",
+            detail: "from Pi in the terminal",
+            icon: "terminal",
+            run: () => openSheet({ type: "pi-sessions" }),
+        },
         conversationId !== null && {
             label: "All sessions",
             detail: "home",
@@ -129,6 +137,13 @@ function actionItems() {
                 label: "Switch model",
                 icon: "sparkle",
                 run: () => openSheet({ type: "model" }),
+            },
+        store.state.me?.role === "owner" &&
+            store.state.server?.defaultModel !== undefined && {
+                label: "Default model",
+                detail: "the model and thinking new sessions start with",
+                icon: "sparkle",
+                run: () => openSheet({ type: "model", id: "default", forDefault: true }),
             },
         conversation &&
             browserAvailable() && {
@@ -209,6 +224,13 @@ function actionItems() {
                 icon: "archive",
                 run: () => setArchived([conversation.id], !conversation.archived),
             },
+        pipAvailable() && {
+            label: "Ask PiP",
+            detail: "your assistant, over any screen",
+            icon: "pip",
+            keys: "Alt A",
+            run: () => openPip(),
+        },
         {
             label: "Running now",
             detail: "everything Pi is doing",
@@ -381,6 +403,9 @@ export function Launcher({ leaving }) {
         conversationId,
         store.state.desktopTheme,
         store.state.appearance,
+        // Who you are and what the server keeps (the default model is the owner's), once they are known.
+        store.state.me,
+        store.state.server,
     ]);
 
     const flat = groups.flatMap((group) => group.items);

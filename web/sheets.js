@@ -10,18 +10,22 @@ import { FileSheet } from "./sheets/file.js";
 import { FindSheet } from "./sheets/find.js";
 import { InsightsSheet } from "./sheets/insights.js";
 import { CwdSheet } from "./sheets/folder.js";
+import { MemorySheet } from "./sheets/memory.js";
 import { MenuSheet, PlacesSheet } from "./sheets/menu.js";
 import { MessageSheet } from "./sheets/message.js";
 import { ModelPicker } from "./sheets/model.js";
 import { InviteSheet, PeopleSheet } from "./sheets/people.js";
 import { AuthDialog, ProvidersSheet } from "./sheets/providers.js";
 import { RunningSheet } from "./sheets/running.js";
+import { HooksSheet } from "./sheets/hooks.js";
 import { SchedulesSheet } from "./sheets/schedules.js";
 import { ShortcutsSheet } from "./sheets/shortcuts.js";
 import { SpendSheet } from "./sheets/spend.js";
 import { TextSheet } from "./sheets/text.js";
 import { ArtifactsSheet, ArtifactViewer, ImageViewer } from "./sheets/viewers.js";
+import { PiSessionSheet, PiSessionsSheet, piSessionsAvailable } from "./sheets/pi-sessions.js";
 import { WorktreeSheet } from "./sheets/worktree.js";
+import { TrustSheet } from "./trust.js";
 import { addLayer, removeLayer } from "./back.js";
 import { actions, api, store } from "./store.js";
 import { Boundary, html, usePresence } from "./ui.js";
@@ -169,6 +173,17 @@ function sheetBody(sheet) {
         case "worktree":
             body = html`<${WorktreeSheet} />`;
             break;
+        case "trust":
+            body = view.conversation ? html`<${TrustSheet} />` : null;
+            break;
+        case "pi-sessions":
+            body = piSessionsAvailable() ? html`<${PiSessionsSheet} />` : null;
+            break;
+        case "pi-session":
+            body = piSessionsAvailable()
+                ? html`<${PiSessionSheet} key=${sheet.id} path=${sheet.id} />`
+                : null;
+            break;
         case "file":
             body = view.conversation
                 ? html`<${FileSheet} key=${sheet.id} path=${sheet.id} line=${sheet.line} />`
@@ -187,6 +202,12 @@ function sheetBody(sheet) {
             break;
         case "schedules":
             body = view.conversation ? html`<${SchedulesSheet} />` : null;
+            break;
+        case "hooks":
+            body = html`<${HooksSheet} />`;
+            break;
+        case "memory":
+            body = view.conversation ? html`<${MemorySheet} draft=${sheet.draft ?? ""} />` : null;
             break;
         case "share":
             body = html`<${ShareSheet} share=${sheet.share} />`;

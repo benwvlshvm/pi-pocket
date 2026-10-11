@@ -2,9 +2,12 @@
 import { browserAvailable, openInBrowser, toggleBrowser } from "./browser.js";
 import { filesAvailable, toggleFiles } from "./files-panel.js";
 import { branchAvailable } from "./sheets/branch.js";
+import { memoryAvailable, remember } from "./sheets/memory.js";
 import { togglePeeks } from "./peeks.js";
+import { askPip, openPip, pipAvailable } from "./pip.js";
 import { actions, collab, navigate, notify, openSheet, scoped, store } from "./store.js";
 import { chooseTheme, THEMES } from "./theme.js";
+import { trustAvailable } from "./trust.js";
 import { copyText, formatTokens, formatWhen, modelLabel, replyText, shortPath } from "./ui.js";
 
 const agent = () => store.state.view.agent;
@@ -18,31 +21,46 @@ export const schedulesAvailable = () =>
 const goalsAvailable = () =>
     isSession() && store.state.server?.extensions?.includes("pocket-goals") === true;
 
+/** Webhooks need the triggers extension; so does watching a PR, which is for sessions other than PiP. */
+export const triggersOn = () =>
+    store.state.server?.extensions?.includes("pocket-triggers") === true;
+export const watchAvailable = () =>
+    isSession() && !store.state.view.conversation?.pip && triggersOn();
+
+/** Watch this session's pull request (its branch's, or `pr`), and say what that means. */
+export async function watchPr(pr) {
+    const { number } = await actions.watchPr(pr);
+
+    notify(
+        "info",
+        `Watching PR #${number}: Pi hears when its checks fail, it has conflicts, or reviewers comment, until it is merged.`,
+    );
+}
+
 /** How long a list of prompt templates is used before it is fetched again: someone may be writing one. */
 const TEMPLATES_FOR_MS = 30_000;
 
-/** Fetch Pi's prompt templates for this conversation, unless a fresh list is here. Call when someone types a command. */
+/**
+ * Fetch Pi's prompt templates for this conversation, unless a fresh list is here. Call when someone types a command. A
+ * list is for a folder too: the session moved (`/cwd`, a worktree) has another project's templates and skills.
+ */
 export function loadTemplates() {
     const id = store.state.conversationId;
+    const cwd = store.state.view.agent?.cwd;
     const cached = store.state.templates;
+    const same = cached?.conversationId === id && cached?.cwd === cwd;
 
-    if (
-        id === null ||
-        (cached?.conversationId === id && Date.now() - cached.at < TEMPLATES_FOR_MS)
-    ) {
+    if (id === null || (same && Date.now() - cached.at < TEMPLATES_FOR_MS)) {
         return;
     }
 
     store.set({
-        templates: {
-            conversationId: id,
-            at: Date.now(),
-            list: cached?.conversationId === id ? cached.list : [],
-        },
+        templates: { conversationId: id, cwd, at: Date.now(), list: same ? cached.list : [] },
     });
     actions.prompts().then(
         (list) =>
             store.state.templates?.conversationId === id &&
+            store.state.templates?.cwd === cwd &&
             store.set({ templates: { ...store.state.templates, list } }),
         () => {},
     );
@@ -52,7 +70,10 @@ export function loadTemplates() {
 function templates() {
     const cached = store.state.templates;
 
-    if (cached?.conversationId !== store.state.conversationId) {
+    if (
+        cached?.conversationId !== store.state.conversationId ||
+        cached.cwd !== store.state.view.agent?.cwd
+    ) {
         return [];
     }
 
@@ -279,6 +300,26 @@ const COMMANDS = [
         },
     },
     {
+        name: "remember",
+        args: "<lesson>",
+        description: "Keep a lesson for Pi in every session of this project",
+        available: () => memoryAvailable() && store.state.me?.role !== "viewer",
+        run: async (arg) => {
+            if (arg === "") {
+                return openSheet({ type: "memory" });
+            }
+
+            const lesson = await remember(arg);
+
+            notify(
+                "info",
+                lesson.pending
+                    ? "Remembered. Pi uses it once the owner approves it."
+                    : "Remembered. Pi gets it from its next message.",
+            );
+        },
+    },
+    {
         name: "until",
         args: "<command>",
         description: "Pi keeps going until a check passes, such as npm test (5 checks at most)",
@@ -291,6 +332,14 @@ const COMMANDS = [
             await actions.setGoal(arg);
             notify("info", `Pi keeps going until ${arg} passes, checked after each answer.`);
         },
+    },
+    {
+        name: "watch",
+        args: "[PR number or URL]",
+        description:
+            "Watch this session's pull request: Pi fixes failed checks and answers reviews until it is merged",
+        available: watchAvailable,
+        run: (arg) => watchPr(arg),
     },
     { name: "stop", description: "Stop the current run", run: () => actions.abort() },
     { name: "copy", description: "Copy Pi’s last reply", run: copyLast },
@@ -350,6 +399,13 @@ const COMMANDS = [
         run: (arg) => openSheet({ type: "branch", query: arg }),
     },
     {
+        name: "pip",
+        args: "[message]",
+        description: "Open PiP, your assistant over every session, or ask it something",
+        available: pipAvailable,
+        run: (arg) => (arg === "" ? openPip() : askPip(arg)),
+    },
+    {
         name: "peek",
         description: "Show or hide peek tiles: other sessions' live work beside this one",
         available: () => store.state.server?.peeks === true,
@@ -366,6 +422,12 @@ const COMMANDS = [
         run: () => openSheet({ type: "providers" }),
     },
     { name: "settings", description: "Open the menu", run: () => openSheet({ type: "menu" }) },
+    {
+        name: "trust",
+        description: "Whether Pi trusts this project, for its own skills",
+        available: trustAvailable,
+        run: () => openSheet({ type: "trust" }),
+    },
     {
         name: "theme",
         args: "[name]",

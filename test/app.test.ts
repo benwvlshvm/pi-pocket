@@ -438,9 +438,13 @@ test("the owner turns extensions off and on, the guard follows its switch, and t
             "plan.ts",
             "guard.ts",
             "codemode.ts",
+            "memory.ts",
+            "pip.ts",
+            "triggers.ts",
         ],
     );
     assert.equal(module("browser.ts").title, "Browser");
+    assert.equal(module("pip.ts").title, "PiP");
     assert.deepEqual(module("browser.ts").extensions[0]?.tools, ["browser"]);
     assert.equal(module("prompt.ts").required, true);
     assert.equal(module("codemode.ts").title, "Codemode");
@@ -773,6 +777,12 @@ test("viewers read and chat but never steer; people invited to one session see o
             /not shared/,
         );
         await assert.rejects(app.commands.createSession(scoped, { cwd: work }), /one session/);
+        // Nor move it elsewhere: what they may read is its folder.
+        await assert.rejects(
+            app.commands.configure(id, scoped, { cwd: "/etc" }),
+            /cannot move it to another folder/,
+        );
+        assert.equal(app.cwdOf(id), work);
         const tab = fakeTab(other, scoped);
 
         await app.attach(tab.client);

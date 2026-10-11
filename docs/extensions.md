@@ -61,7 +61,7 @@ The file:
 Installing an extension with a name already installed replaces it, and a tool with the name of another replaces it in every session. So Pi Pocket refuses a drop-in that would take a name it keeps for itself, or one another module already has, and says so in Menu → Extensions:
 
 - Extension names `coding-tools`, `pocket-core`, and anything starting with `pocket-` (`pocket-prompt`, `pocket-guard`, and the rest), whether that built-in is on or off.
-- The built-in tools: `read`, `write`, `edit`, `bash`, `artifact`, `browser`, `subagent`, `schedule`, and `codemode`.
+- The built-in tools: `read`, `write`, `edit`, `bash`, `artifact`, `browser`, `subagent`, `schedule`, `codemode`, and `memory`, and PiP's: `sessions`, `session_read`, `session_start`, `session_send`, `session_follow`, `session_stop`, `session_archive`, `session_schedule`, `approvals`, `repo_watch`, and `session_watch_pr`, and the triggers' `watch_pr`.
 - An extension or tool name another module installed: the first one in keeps it.
 
 Give every extension and tool a name of your own, with a prefix (`example-clock`, `acme_lookup`). To change how a built-in tool works, wrap it (`wrapTool` in Pi Durable's README) or check its calls with a hook, rather than replacing it.
@@ -107,15 +107,23 @@ Sections render before every request, and only those that changed are sent again
 
 What the default export receives. Extensions reach the app only through it; it stays the same while modules reload.
 
-| Member                           | What it is                                                                              |
-| -------------------------------- | --------------------------------------------------------------------------------------- |
-| `dataDir`, `agentDir`            | Pi Pocket's data folder; Pi's (`~/.pi/agent`)                                           |
-| `notice(level, message)`         | Report something to the server log and the app (`"info"`, `"warning"`, `"error"`)       |
-| `resolveModel(spec)`             | `provider/modelId` (or a bare id) to an available model, or an error naming the choices |
-| `requesterOf(conversationId)`    | The id of the person Pi works for in a session now                                      |
-| `skillPaths()`                   | The extra skill folders in Pi's settings                                                |
-| `approvals`, `guard`             | Calls waiting for a person to allow them; Lancet Guard                                  |
-| `schedules`, `goals`, `browsers` | Scheduled messages, Done when, and the built-in browser, as their extensions use them   |
+| Member                           | What it is                                                                                         |
+| -------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `dataDir`, `agentDir`            | Pi Pocket's data folder; Pi's (`~/.pi/agent`)                                                      |
+| `notice(level, message)`         | Report something to the server log and the app (`"info"`, `"warning"`, `"error"`)                  |
+| `resolveModel(spec)`             | `provider/modelId` (or a bare id) to an available model, or an error naming the choices            |
+| `requesterOf(conversationId)`    | The id of the person Pi works for in a session now                                                 |
+| `skillPaths()`                   | The extra skill folders in Pi's settings                                                           |
+| `skills(cwd)`                    | Pi's skills for a session working in `cwd`, from every place Pi looks                              |
+| `heldBack(conversationId)`       | Why work Pi would start there with nobody asking may not start now (a spend limit), or `undefined` |
+| `onLimitsChanged(listener)`      | Call `listener` when the owner changes a spend limit; returns how to stop                          |
+| `approvals`, `guard`             | Calls waiting for a person to allow them; Lancet Guard                                             |
+| `schedules`, `goals`, `browsers` | Scheduled messages, Done when, and the built-in browser, as their extensions use them              |
+| `memory`                         | Lessons Pi keeps across sessions: their projects, the ones in force, saving and changing them      |
+| `watches`                        | Sessions' PR watches: starting, stopping, and reading one, and the task that looks                 |
+| `repoWatches`                    | Repository watches' task, which the triggers extension installs                                    |
+
+Modules reload into the running server, but the server's own part (the host among it) changes only with a restart. A module that uses a member new to the host must work without it until then: check that it is there (`typeof host.heldBack === "function"`) and do as before when it is not. A module that called a missing member would fail at its first use, in every session.
 
 To type it, import the type by the absolute path of `src/server/host.ts`: `import type { PocketHost } from "/path/to/pi-pocket/src/server/host.ts";`. A type import is gone when the module runs, so the path only matters to the type checker.
 

@@ -39,9 +39,11 @@ import { ATTACHMENTS_HEADING, FILE_BLOCK, FROM_PREFIX, NOTE_ENTRY } from "./entr
 import { describe, HttpError, optionalText } from "./errors.ts";
 import { homePath } from "./paths.ts";
 import { mentionedPaths, viewFile } from "./files.ts";
+import { isThinkingLevel, THINKING_LEVELS } from "./models.ts";
+import { writePiSession } from "./pi-sessions.ts";
 import { snippet } from "./projection.ts";
 import { expandPromptTemplate, expandSkillCommand } from "./prompts.ts";
-import { clientKey, ownRequest } from "./requests.ts";
+import { clientKey, ownRequest, requestFor } from "./requests.ts";
 import { type Resend, resendContent, resendRequest, ResendTask, userContent } from "./resend.ts";
 import { wantsTitle, writeTitle } from "./titles.ts";
 import { describeMoment, describeRepeat, knownZone } from "./when.ts";
@@ -69,7 +71,6 @@ export interface SubmitRequest {
     inlineFiles?: boolean;
 }
 
-const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 /** Attached images that also go to the model itself, when it takes images. */
 const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 const MAX_INLINE_IMAGE = 5 * 1024 * 1024;
@@ -85,6 +86,8 @@ const IMAGE_MIME: Record<string, string> = {
     ".webp": "image/webp",
 };
 const MAX_TITLE = 120;
+/** A title as stored: one line, so it cannot pass for more lines where it is quoted (PiP's lists, reports). */
+const oneLine = (title: string): string => title.replace(/\s+/g, " ").trim().slice(0, MAX_TITLE);
 /** The extension that makes plan mode block changes; without it, plan mode would do nothing. */
 const PLAN_EXTENSION = "pocket-plan";
 /** What Pi is told when someone approves its plan. */
@@ -154,7 +157,8 @@ export class Commands {
             throw new HttpError(403, "You were invited to one session and cannot start new ones.");
         }
 
-        const title = optionalText(request.title, "title")?.trim().slice(0, MAX_TITLE) || undefined;
+        const given = optionalText(request.title, "title");
+        const title = (given === undefined ? undefined : oneLine(given)) || undefined;
         const folder = app.workspace.checkDirectory(
             optionalText(request.cwd, "cwd") ?? app.defaultCwd,
         );
@@ -195,6 +199,59 @@ export class Commands {
                 return { id: conversation.id };
             },
         );
+    }
+
+    /**
+     * Continue one of Pi's sessions from the terminal here: a new session with its history, in its folder, with its model
+     * when that one is signed in here (`pi-sessions.ts`). The owner's, as Pi's own files are.
+     */
+    async continuePiSession(user: User, path: string): Promise<{ id: ConversationId }> {
+        const app = this.#app;
+        const session = await app.piSessions.read(user, path);
+        let cwd: string;
+
+        try {
+            cwd = app.workspace.checkDirectory(session.cwd);
+        } catch {
+            throw new HttpError(
+                400,
+                `The folder this Pi session worked in is not there anymore: ${session.cwd}`,
+            );
+        }
+
+        const start = this.#defaultModel(session);
+        const title = session.title.slice(0, MAX_TITLE);
+        const now = Date.now();
+        const conversation = await app.harness.createConversation(
+            {
+                ownership: { kind: "ownerless" },
+                agent: {
+                    cwd,
+                    ...(start.model === undefined ? {} : { model: start.model }),
+                    ...(start.thinkingLevel === undefined
+                        ? {}
+                        : { thinkingLevel: start.thinkingLevel }),
+                },
+                init: async (tx, id) => {
+                    (await tx.doc(SessionsDoc)).items[String(id)] = {
+                        cwd,
+                        title,
+                        createdAt: now,
+                        updatedAt: now,
+                        createdBy: user.id,
+                        fromPi: { session: session.id, count: session.count },
+                    };
+                    await writePiSession(tx, id, session, {
+                        session: session.id,
+                        title: session.title,
+                        file: path,
+                    });
+                },
+            },
+            context,
+        );
+
+        return { id: conversation.id };
     }
 
     /**
@@ -291,8 +348,22 @@ export class Commands {
         );
     }
 
-    /** The model a new session starts with: the one last chosen here, else Pi's default, else any available one. */
-    #defaultModel(): { model?: ModelRef; thinkingLevel?: ModelThinkingLevel } {
+    /** The model and thinking level a new session starts with now. */
+    defaultModel(): { model?: ModelRef; thinkingLevel?: ModelThinkingLevel } {
+        return this.#defaultModel();
+    }
+
+    /**
+     * The model a new session starts with: `prefer` (with its thinking level) when it is signed in here, or the owner's
+     * default, or the one last picked, or Pi's default, or the first there is.
+     */
+    #defaultModel(prefer?: {
+        model: { provider: string; modelId: string } | null;
+        thinkingLevel: string;
+    }): {
+        model?: ModelRef;
+        thinkingLevel?: ModelThinkingLevel;
+    } {
         const { models, config, settings } = this.#app;
         const available = models.getAvailableSnapshot();
         const pick = (provider: string | undefined, id: string | undefined) =>
@@ -300,7 +371,12 @@ export class Commands {
                 ? undefined
                 : available.find((model) => model.provider === provider && model.id === id);
         const last = config.lastModel;
+        const preferred = pick(prefer?.model?.provider, prefer?.model?.modelId);
+        const chosen = config.defaultModel;
+        const fallback = pick(chosen?.provider, chosen?.modelId);
         const model =
+            preferred ??
+            fallback ??
             pick(last?.provider, last?.modelId) ??
             pick(settings.getDefaultProvider(), settings.getDefaultModel()) ??
             available[0];
@@ -309,7 +385,11 @@ export class Commands {
             return {};
         }
 
-        const level = (last?.thinkingLevel ??
+        const level = ((preferred === undefined ? undefined : prefer?.thinkingLevel) ??
+            (preferred === undefined && fallback !== undefined
+                ? chosen?.thinkingLevel
+                : undefined) ??
+            last?.thinkingLevel ??
             settings.getDefaultThinkingLevel() ??
             "off") as ModelThinkingLevel;
 
@@ -346,7 +426,7 @@ export class Commands {
 
             // A rename moves the session up the list. Archiving does not: brought back, or undone, it returns to where it was.
             if (patch.title !== undefined) {
-                meta.title = patch.title.trim().slice(0, MAX_TITLE) || undefined;
+                meta.title = oneLine(patch.title) || undefined;
                 meta.updatedAt = Date.now();
             }
 
@@ -354,7 +434,7 @@ export class Commands {
                 meta.archived = patch.archived;
             }
         }, context);
-        const title = patch.title?.trim().slice(0, MAX_TITLE);
+        const title = patch.title === undefined ? undefined : oneLine(patch.title);
 
         if (title !== undefined && title !== "" && title !== before?.title) {
             await app.collab.activity(id, user, `renamed the session to “${title}”`);
@@ -371,15 +451,27 @@ export class Commands {
         }
     }
 
+    /**
+     * Send a message to Pi as `user`. With `via`, an assistant (PiP) sends it for them: it is marked as sent through it,
+     * and is theirs to pay for and steer, but not their own words (`requestFor`). Only server code passes `via`.
+     */
     async submit(
         id: ConversationId,
         user: User,
         request: SubmitRequest,
-    ): Promise<{ submissionId: SubmissionId }> {
+        via?: string,
+    ): Promise<{ submissionId: SubmissionId; requestId: string }> {
         const app = this.#app;
 
         app.requireSee(user, id);
         await app.requireDriver(id, user);
+
+        // PiP turned off takes nothing, from its person either: it would run without its rules, and be compacted without
+        // its own summary (`pip-compact.ts`). What else goes to it (reports, schedules, watches) waits meanwhile.
+        if (app.pip.ownerOf(id) !== undefined && !app.pip.available(user)) {
+            throw new HttpError(409, "PiP is turned off in Extensions.");
+        }
+
         const conversation = await app.conversation(id);
         const typed = request.text.trim();
         // `/skill:name request` sends the skill with the request; `/name arguments`, Pi's prompt template of that name.
@@ -410,9 +502,11 @@ export class Commands {
             (file) =>
                 `- ${file.path} (${file.name}, ${file.mime || "unknown type"}, ${file.size} bytes)`,
         );
+        const written =
+            lines.length === 0 ? text : `${text}${ATTACHMENTS_HEADING}${lines.join("\n")}`.trim();
         const body = this.messageText(
             user,
-            lines.length === 0 ? text : `${text}${ATTACHMENTS_HEADING}${lines.join("\n")}`.trim(),
+            via === undefined ? written : `[via ${via}] ${written}`,
         );
         const mentioned =
             request.inlineFiles === true
@@ -437,7 +531,10 @@ export class Commands {
         }
 
         const content = parts.length === 1 ? body : parts;
-        const requestId = ownRequest(user.id, clientKey(request.requestId));
+        const requestId =
+            via === undefined
+                ? ownRequest(user.id, clientKey(request.requestId))
+                : requestFor(user.id, clientKey(request.requestId));
         const submission = await conversation.submit(
             {
                 type: "input",
@@ -452,7 +549,7 @@ export class Commands {
         await this.#touched(id, typed);
         this.#reportUnanswered(id, submission.wait(context));
 
-        return { submissionId: submission.id };
+        return { submissionId: submission.id, requestId };
     }
 
     /**
@@ -621,6 +718,8 @@ export class Commands {
         const conversation = await app.conversation(id);
         const busy = app.isBusy(id);
 
+        // Stop withdraws what waits in the queue, subagents' reports too: a person meant them gone.
+        await this.#discardReports(id);
         void conversation
             .abort(context)
             .catch((error: unknown) => app.notice("error", `Abort failed: ${describe(error)}`, id));
@@ -628,6 +727,32 @@ export class Commands {
         if (busy) {
             await app.collab.activity(id, user, "stopped the run");
         }
+    }
+
+    /**
+     * Mark the batch of subagents' reports in `id`'s queue (or, given `submissionId`, only if that is it) as a person's
+     * to withdraw: the courier then lets it go instead of sending it again, as it does with one a spend limit's stop
+     * withdrew.
+     */
+    async #discardReports(id: ConversationId, submissionId?: number): Promise<void> {
+        await this.#app.harness.commit(async (tx) => {
+            const state = await tx.doc(SubagentsDoc, id);
+            const sending = state.sending;
+
+            if (sending === undefined || sending.discarded === true) {
+                return;
+            }
+
+            if (submissionId !== undefined) {
+                const record = await tx.submissionByRequest(id, sending.request);
+
+                if (record === undefined || Number(record.id) !== submissionId) {
+                    return;
+                }
+            }
+
+            state.sending = { ...sending, discarded: true };
+        }, context);
     }
 
     /** Take back a queued message. Anyone may take back their own; someone else's needs the right to drive. */
@@ -642,6 +767,7 @@ export class Commands {
             await app.requireDriver(id, user);
         }
 
+        await this.#discardReports(id, submissionId);
         const result = await app.harness.abortSubmission(
             submissionId as unknown as SubmissionId,
             context,
@@ -676,15 +802,21 @@ export class Commands {
 
         if (
             optionalText(request.thinkingLevel, "thinkingLevel") !== undefined &&
-            !THINKING_LEVELS.has(request.thinkingLevel!)
+            !isThinkingLevel(request.thinkingLevel)
         ) {
-            throw new HttpError(
-                400,
-                `thinkingLevel must be one of ${[...THINKING_LEVELS].join(", ")}`,
-            );
+            throw new HttpError(400, `thinkingLevel must be one of ${THINKING_LEVELS.join(", ")}`);
         }
 
         optionalText(request.cwd, "cwd");
+
+        // Someone invited to one session sees files in its folder only: moving it would move what they see.
+        if (request.cwd !== undefined && user.sessions !== undefined) {
+            throw new HttpError(
+                403,
+                "You were invited to one session and cannot move it to another folder.",
+            );
+        }
+
         const conversation = await app.conversation(id);
         const current = await app.agentState(id);
         const ref = request.model ?? current?.model;
@@ -952,6 +1084,136 @@ export class Commands {
         );
     }
 
+    /** Watch the session's pull request (its branch's, or `pr`): Pi hears of failed checks, conflicts, and reviews. */
+    async watchPr(id: ConversationId, user: User, pr: unknown): Promise<{ number: number }> {
+        const app = this.#app;
+
+        app.requireSee(user, id);
+        await app.requireDriver(id, user);
+        app.spend.check(user, id);
+        const asked = optionalText(pr, "pr");
+        const watch = await app.watches.start(
+            id,
+            user.id,
+            asked === undefined ? {} : { pr: asked },
+        );
+
+        await app.collab.activity(
+            id,
+            user,
+            `started watching PR #${watch.number} “${snippet(watch.title, 60)}”`,
+        );
+
+        return { number: watch.number };
+    }
+
+    /** Stop watching the session's pull request, or clear a watch that ended. */
+    async unwatchPr(id: ConversationId, user: User): Promise<void> {
+        const app = this.#app;
+
+        app.requireSee(user, id);
+        await app.requireDriver(id, user);
+        const watch = await app.watches.stop(id);
+
+        if (watch?.status === "watching") {
+            await app.collab.activity(id, user, `stopped watching PR #${watch.number}`);
+        }
+    }
+
+    /**
+     * The webhooks a person may manage, each with where it sends (a session's title, or PiP), and the address other
+     * services reach this server at, when it has a public one.
+     */
+    async hooks(user: User) {
+        const app = this.#app;
+        const hooks = (await app.hooks.list(user)).map((hook) => {
+            const target = hook.target as unknown as ConversationId;
+            const meta = app.sessionMeta(target);
+
+            return {
+                ...hook,
+                // A session the person can no longer open keeps its title to itself.
+                targetTitle:
+                    meta?.pip !== undefined
+                        ? "PiP"
+                        : app.canSee(user, target)
+                          ? (meta?.title ?? "New session")
+                          : "a session you cannot open",
+                pip: meta?.pip !== undefined,
+            };
+        });
+
+        // Repository watches (`repo-watches.ts`), which PiP sets up: shown with the hooks, to see and remove.
+        const repoWatches = (await app.repoWatches.list(user)).map((watch) => {
+            const target = watch.target as unknown as ConversationId;
+            const meta = app.sessionMeta(target);
+
+            return {
+                ...watch,
+                targetTitle:
+                    meta?.pip !== undefined
+                        ? "PiP"
+                        : app.canSee(user, target)
+                          ? (meta?.title ?? "New session")
+                          : "a session you cannot open",
+                pip: meta?.pip !== undefined,
+            };
+        });
+
+        return { hooks, repoWatches, base: app.access?.url ?? null };
+    }
+
+    /** Make a webhook that messages a session (or PiP) for this person. */
+    async addHook(
+        user: User,
+        body: {
+            target?: unknown;
+            name?: unknown;
+            instructions?: unknown;
+            signed?: unknown;
+            anyone?: unknown;
+        },
+    ) {
+        const app = this.#app;
+        // "pip": this person's PiP, made now if they have none yet.
+        const target =
+            body.target === "pip" && app.pip.available(user)
+                ? Number(await app.pip.ensure(user))
+                : Number(body.target);
+
+        if (!Number.isSafeInteger(target) || target < 0) {
+            throw new HttpError(400, "Say which session the webhook messages.");
+        }
+
+        const id = target as unknown as ConversationId;
+        const hook = await app.hooks.add(user, id, body);
+
+        if (app.sessionMeta(id)?.pip === undefined) {
+            await app.collab.activity(id, user, `made the webhook “${snippet(hook.name, 60)}”`);
+        }
+
+        return hook;
+    }
+
+    async removeHook(user: User, hookId: string): Promise<void> {
+        const app = this.#app;
+        const hook = await app.hooks.remove(user, hookId);
+        const target = hook.target as unknown as ConversationId;
+
+        // No line where the remover can no longer go.
+        if (
+            app.sessionMeta(target) !== undefined &&
+            app.sessionMeta(target)?.pip === undefined &&
+            app.canSee(user, target)
+        ) {
+            await app.collab.activity(
+                target,
+                user,
+                `removed the webhook “${snippet(hook.name, 60)}”`,
+            );
+        }
+    }
+
     /** Pi keeps working until `command` passes, checked after each of its answers. */
     async setGoal(id: ConversationId, user: User, command: unknown): Promise<void> {
         const app = this.#app;
@@ -1161,6 +1423,11 @@ export class Commands {
         if (app.sessionMeta(id) === undefined) {
             throw new HttpError(400, "Only sessions can be forked");
         }
+
+        // A fork would carry PiP's tools and none of PiP: they act as PiP's person, which a fork is not.
+        if (app.sessionMeta(id)?.pip !== undefined) {
+            throw new HttpError(400, "PiP's conversation cannot be forked. Start fresh instead.");
+        }
     }
 
     /**
@@ -1322,12 +1589,21 @@ export class Commands {
 
         app.requireSee(user, id);
         await app.requireDriver(id, user);
+        // PiP's summaries are its own, written by its extension's hook with outside text left out: while PiP is off,
+        // there is no hook, and Pi Durable's summary would read what came from outside as it is.
+        const pip = app.pip.ownerOf(id) !== undefined;
+
+        if (pip && !app.pip.available(user)) {
+            throw new HttpError(409, "PiP is turned off in Extensions.");
+        }
+
         // Compacting asks the model for a summary, which costs like any other request.
         app.spend.check(user, id);
         const conversation = await app.conversation(id);
         const taskId = await conversation.compact(instructions, context);
+        const done = pip ? "PiP's context compacted." : "Compacted.";
 
-        app.notice("info", "Compacting…", id);
+        app.notice("info", pip ? "Compacting PiP's context…" : "Compacting…", id);
         await app.collab.activity(id, user, "started compacting the context", false);
         void app.harness.waitForTask(taskId, context).then(
             (receipt) => {
@@ -1335,18 +1611,26 @@ export class Commands {
 
                 if (outcome.status === "completed") {
                     const { entryId, submissionId } = outcome.result;
+                    // PiP's own summary could not be written: it declined, rather than let Pi Durable write one.
+                    const failed = pip ? app.pipCompaction.failure(Number(taskId)) : undefined;
 
-                    app.notice(
-                        "info",
-                        entryId === undefined && submissionId === undefined
-                            ? "Nothing to compact: the context fits in the recent window."
-                            : "Compacted.",
-                        id,
-                    );
+                    if (failed !== undefined) {
+                        app.notice("error", `PiP's context was not compacted: ${failed}`, id);
+                    } else {
+                        app.notice(
+                            "info",
+                            entryId === undefined && submissionId === undefined
+                                ? "Nothing to compact: the context fits in the recent window."
+                                : done,
+                            id,
+                        );
+                    }
                 } else if (outcome.status === "aborted") {
                     app.notice("info", "Compaction aborted.", id);
                 } else {
-                    app.notice("error", `Compaction ${outcome.status}`, id);
+                    const why = "error" in outcome ? outcome.error?.message : undefined;
+
+                    app.notice("error", `Compaction ${outcome.status}${why ? `: ${why}` : ""}`, id);
                 }
             },
             (error: unknown) => app.notice("error", describe(error), id),

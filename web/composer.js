@@ -24,7 +24,11 @@ import {
     typing,
     uid,
 } from "./store.js";
-import { branchAvailable, headLabel } from "./sheets/branch.js";
+import { useDock } from "./dock.js";
+import { SubagentsBar } from "./subagents.js";
+import { TrustBar } from "./trust.js";
+import { prefs } from "./theme.js";
+import { MicButton, useDictation } from "./voice.js";
 import { formatBytes, formatTokens, html, Icon, Marked, modelLabel, Spinner } from "./ui.js";
 
 const coarse = matchMedia("(pointer: coarse)").matches;
@@ -66,6 +70,48 @@ function savePastes(id, pastes) {
 
 /** The message with each paste's placeholder replaced by what was pasted. */
 const expandPastes = (text, pastes) => text.replace(PASTED, (whole, n) => pastes[n] ?? whole);
+
+/** The subagents whose answers a queued message of reports carries (`extensions/subagents.ts`); null for any other. */
+function reportNames(text) {
+    // Only a message that starts with a report is one: a person's own may begin "[subagent " too.
+    if (!/^\[subagent \S+ (?:answered|failed)/.test(text ?? "")) {
+        return null;
+    }
+
+    return [
+        ...new Set(
+            [...text.matchAll(/\[subagent (\S+) (?:answered|failed)/g)].map((match) => match[1]),
+        ),
+    ];
+}
+
+/** The subagents a waiting message carries reports from; null for a person's message, which has who sent it. */
+const queuedReports = (item) => (item.by === undefined ? reportNames(item.text) : null);
+
+/** What kind of message waits for Pi: a steer, one queued for after its answer, a note, or subagents' reports. */
+function queuedMode(item) {
+    const names = queuedReports(item);
+
+    if (names) {
+        return names.length === 1 ? "Report" : "Reports";
+    }
+
+    return item.mode === "steer" ? "Steer" : item.mode === "followUp" ? "Queue" : "Note";
+}
+
+/** Who sent a message, as the server writes it at the start when several people use Pi (`FROM_PREFIX`). */
+const FROM = /^\[from: [^\]\n]{1,60}\] /;
+
+/** What a waiting message says (its row names who sent it); subagents' reports say whose, as their text is long. */
+function queuedText(item) {
+    const names = queuedReports(item);
+
+    if (!names) {
+        return (item.text ?? "").replace(FROM, "");
+    }
+
+    return `from ${names.join(", ")}, on ${names.length === 1 ? "its" : "their"} way to Pi`;
+}
 
 /** Take turns: who drives, who asked, and the buttons to hand over, ask, or take the wheel. */
 function DriverBar() {
@@ -203,6 +249,64 @@ function GoalBar() {
     </div>`;
 }
 
+/** How a watch's last look found the PR's checks, and why a watch ended. */
+const WATCH_CHECKS = {
+    pending: "checks running",
+    passed: "checks pass",
+    failed: "checks failed",
+};
+
+function watchEnded(watch) {
+    switch (watch.status) {
+        case "merged":
+            return "was merged.";
+        case "closed":
+            return "was closed.";
+        case "gave-up":
+            return `had more to tell than ${watch.max} messages: watch stopped.`;
+        case "expired":
+            return "had nothing new for two weeks: watch stopped.";
+        default:
+            return `could not be watched: ${watch.note ?? "something went wrong"}.`;
+    }
+}
+
+/** A PR watch: which PR, its checks, what it sent Pi; stop it, or dismiss one that ended. */
+function WatchBar() {
+    const { watch } = store.state.view;
+
+    if (!watch) {
+        return null;
+    }
+
+    const pr = html`<a href=${watch.url} target="_blank" rel="noopener">PR #${watch.number}</a>`;
+    const checks = WATCH_CHECKS[watch.checks];
+    const text =
+        watch.status === "watching"
+            ? html`<strong>Watching</strong> ${pr}${checks ? ` · ${checks}` : ""}${watch.sent > 0 ? ` · ${watch.sent} of ${watch.max} sent` : ""}${watch.unchecked ? " · owner's comments only" : ""}${watch.errors > 0 ? " · last look failed" : watch.note ? " · waiting" : ""}`
+            : html`${pr} ${watchEnded(watch)}`;
+
+    return html`<div
+        class=${`watch-bar ${watch.status}`}
+        title=${[
+            watch.title,
+            watch.unchecked &&
+                "Only the repository owner's comments count: gh cannot push there, so GitHub does not say who else can write.",
+            watch.note,
+        ]
+            .filter(Boolean)
+            .join("\n")}
+    >
+        <span class="grow">${text}</span>
+        ${
+            canSteer() &&
+            html`<button class="link small" onClick=${() => attempt(actions.unwatchPr)}>
+                ${watch.status === "watching" ? "Stop" : "Dismiss"}
+            </button>`
+        }
+    </div>`;
+}
+
 export function Composer() {
     const { view, conversationId } = store.state;
     const [text, setText] = useState(() => drafts.get(conversationId));
@@ -221,6 +325,18 @@ export function Composer() {
     const [searching, setSearching] = useState(false);
     const [inlineFiles, setInlineFiles] = useState(() => localStorage.getItem(INLINE_KEY) === "1");
     const box = useRef(null);
+    // The box as it comes and goes (taking the wheel shows it, with the draft in it): fitted to its text at once.
+    const [setBox] = useState(() => (element) => {
+        box.current = element;
+        fitBox(element);
+    });
+    // Dictation writes into the box as typing does, so the draft keeps what was heard.
+    const dictation = useDictation(box, (value, at) => {
+        setBrowsing(null);
+        update(value, at);
+    });
+    // What is above the message box, and how it shares the room with the conversation (`dock.js`).
+    const dock = useRef(null);
     const picker = useRef(null);
     const list = useRef(null);
     // One per `!` command: sending it again after a lost reply runs it once.
@@ -231,6 +347,7 @@ export function Composer() {
     useEffect(() => {
         const draft = drafts.get(conversationId);
 
+        dictation.stop(true);
         setText(draft);
         setCaret(draft.length);
         setPastes(loadPastes(conversationId));
@@ -275,16 +392,15 @@ export function Composer() {
             element.setSelectionRange(element.value.length, element.value.length);
         });
     }, [insert?.n]);
+    // Again when the text size changes (Appearance), which changes the lines' height.
     useEffect(() => {
-        const element = box.current;
+        const fit = () => fitBox(box.current);
 
-        if (!element) {
-            return;
-        }
+        fit();
+        addEventListener("resize", fit);
 
-        element.style.height = "auto";
-        element.style.height = `${Math.min(element.scrollHeight, innerHeight * 0.4)}px`;
-    }, [text]);
+        return () => removeEventListener("resize", fit);
+    }, [text, prefs().text]);
 
     const update = (value, at = value.length) => {
         setText(value);
@@ -412,6 +528,8 @@ export function Composer() {
         }
     };
 
+    // Something in the box: on a phone while Pi works, Send takes the mic's place (style.css).
+    const filled = text.trim() !== "" || files.length > 0;
     const uploading = files.some((file) => file.state === "uploading");
     const canSend =
         !sending &&
@@ -464,6 +582,8 @@ export function Composer() {
             return;
         }
 
+        // What shows is what goes: words still coming would land in the emptied box.
+        dictation.stop(true);
         const full = expandPastes(text, pastes);
 
         if (parsed) {
@@ -767,13 +887,13 @@ export function Composer() {
         );
     };
 
-    const placeholder = busy
-        ? steer
-            ? "Steer the current run…"
-            : "Queue a follow-up…"
-        : coarse
-          ? "Message Pi…"
-          : "Message Pi… (/ commands · @ files · ! shell)";
+    const placeholder = dictation.listening
+        ? "Listening…"
+        : busy
+          ? steer
+              ? "Steer the current run…"
+              : "Queue a message for after this run…"
+          : "Ask Pi anything…";
     const inbox = view.inbox ?? [];
     const { me, users } = store.state;
     const queuedBy = (item) =>
@@ -783,9 +903,22 @@ export function Composer() {
               ? " · you"
               : ` · ${users.find((user) => user.id === item.by)?.name ?? "someone"}`;
 
+    useDock(dock);
+    // View only now, or someone else took the wheel: the box goes, and dictation with it.
+    const writes = !collab() || (canSteer() && !(view.turns?.on && view.turns.driver !== me?.id));
+
+    useEffect(() => {
+        if (!writes) {
+            dictation.stop(true);
+        }
+    }, [writes]);
+
     if (collab() && !canSteer()) {
         return html`<footer class="composer-wrap">
-            <${TypingLine} where="pi" />
+            <div class="dock" ref=${dock}>
+                <${TypingLine} where="pi" />
+                <${SubagentsBar} />
+            </div>
             <div class="view-only">
                 <span>
                     <strong>View only.</strong> You can read along, react, and chat with the people here.
@@ -806,48 +939,55 @@ export function Composer() {
             : null;
 
     return html`<footer class="composer-wrap">
-        <${TypingLine} where="pi" />
-        ${
-            inbox.length > 0 &&
-            html`<div class="inbox">
-                ${inbox.map(
-                    (item) => html`<div class="queued">
-                        <span class="queued-mode">
-                            ${item.mode === "steer" ? "Steer" : item.mode === "followUp" ? "Queued" : "Note"}
-                            <span class="muted">${queuedBy(item)}</span>
-                        </span>
-                        <span class="queued-text">${item.text ?? ""}</span>
-                        ${
-                            canSteer() &&
-                            (!blocked || item.by === me?.id) &&
-                            html`<button
-                                class="icon-button small"
-                                aria-label="Withdraw"
-                                onClick=${() => attempt(() => actions.withdraw(item.id))}
-                            >
-                                <${Icon} name="close" size=${14} />
-                            </button>`
-                        }
-                    </div>`,
-                )}
-            </div>`
-        }
-        ${collab() && html`<${DriverBar} />`}
-        <${PlanBar} blocked=${blocked} />
-        <${GoalBar} />
+        <div class="dock" ref=${dock}>
+            <${TypingLine} where="pi" />
+            ${
+                // How many wait: shown when the queue does not show them all (`dock.js`).
+                inbox.length > 0 &&
+                html`<div class="inbox-count">
+                    ${inbox.length} ${inbox.length === 1 ? "message" : "messages"} waiting for Pi
+                </div>`
+            }
+            ${
+                inbox.length > 0 &&
+                html`<div class="inbox">
+                    ${inbox.map(
+                        (item) => html`<div class="queued">
+                            <span class="queued-mode">
+                                ${queuedMode(item)}
+                                <span class="muted">${queuedBy(item)}</span>
+                            </span>
+                            <span class="queued-text">${queuedText(item)}</span>
+                            ${
+                                canSteer() &&
+                                (!blocked || item.by === me?.id) &&
+                                html`<button
+                                    class="icon-button small queued-remove"
+                                    aria-label=${queuedReports(item) ? "Discard these reports" : "Withdraw"}
+                                    title=${queuedReports(item) ? "Discard these reports: Pi will not get them" : "Withdraw"}
+                                    onClick=${() => attempt(() => actions.withdraw(item.id))}
+                                >
+                                    <${Icon} name="close" size=${13} />
+                                </button>`
+                            }
+                        </div>`,
+                    )}
+                </div>`
+            }
+            ${collab() && html`<${DriverBar} />`}
+            <${PlanBar} blocked=${blocked} />
+            <${GoalBar} />
+            <${WatchBar} />
+            <${SubagentsBar} />
+            <${TrustBar} />
+        </div>
         ${
             blocked
                 ? html`${
                       busy &&
                       html`<div class="composer-row stop-only">
                           <span class="muted small grow">Pi is working…</span>
-                          <button
-                              class="round stop"
-                              aria-label="Stop"
-                              onClick=${() => attempt(actions.abort)}
-                          >
-                              <${Icon} name="stop" size=${16} />
-                          </button>
+                          <${StopButton} />
                       </div>`
                   }`
                 : html`${
@@ -1004,12 +1144,14 @@ export function Composer() {
                     </div>`
                 }
                 <div
-                    class="composer"
+                    class=${`composer ${busy ? "busy" : ""} ${filled ? "filled" : ""}`}
                     onClick=${(event) => {
-                        // The box is one target: a tap on its padding or between its buttons goes to the text.
+                        // The box is one target: a tap on its edge, around the files sent along, between its buttons,
+                        // or on Send with nothing to send (a disabled button takes no taps), goes to the text.
                         if (
                             event.target === event.currentTarget ||
-                            event.target.classList.contains("composer-row")
+                            event.target.classList.contains("composer-row") ||
+                            event.target.classList.contains("files")
                         ) {
                             box.current?.focus();
                         }
@@ -1049,7 +1191,7 @@ export function Composer() {
                         </div>`
                     }
                     <textarea
-                        ref=${box}
+                        ref=${setBox}
                         rows="1"
                         value=${text}
                         placeholder=${placeholder}
@@ -1067,11 +1209,12 @@ export function Composer() {
                     <div class="composer-row">
                         <${PlacesButton} />
                         <button
-                            class="icon-button"
+                            class="icon-button attach-button"
                             aria-label="Attach files"
+                            title="Attach files"
                             onClick=${() => picker.current?.click()}
                         >
-                            <${Icon} name="clip" />
+                            <${Icon} name="clip" size=${17} />
                         </button>
                         <input
                             ref=${picker}
@@ -1084,17 +1227,20 @@ export function Composer() {
                             }}
                         />
                         <button
-                            class=${`chip model-chip ${agent?.available === false ? "warn" : ""}`}
+                            class=${`model-chip ${agent?.available === false ? "warn" : ""}`}
+                            aria-label=${`Model: ${modelLabel(agent)}${level ? `, thinking ${level}` : ""}`}
+                            title=${`Model and thinking: ${modelLabel(agent)}${level ? `, ${level}` : ""}`}
                             onClick=${() => openSheet({ type: "model" })}
                         >
-                            <span class="glyph">✦</span> ${modelLabel(agent)}
-                            ${level && html`<span class="muted"> ${level}</span>`}
+                            <${Icon} name="sparkle" size=${12} class="model-spark" />
+                            <span class="model-name">${shortModel(agent)}</span>
+                            ${level && html`<span class="model-level">${level}</span>`}
                         </button>
                         ${
                             planAvailable() &&
                             view.conversation?.kind !== "subagent" &&
                             html`<button
-                                class=${`chip toggle ${view.plan?.on ? "on" : ""}`}
+                                class=${`chip toggle plan-chip ${view.plan?.on ? "on" : ""}`}
                                 title="Plan mode: Pi reads and proposes, and changes nothing until you approve"
                                 onClick=${() => attempt(() => actions.setPlan(!view.plan?.on))}
                             >
@@ -1103,45 +1249,94 @@ export function Composer() {
                         }
                         ${
                             busy &&
-                            html`<button
-                                class=${`chip toggle ${steer ? "on" : ""}`}
-                                onClick=${() => setSteer(!steer)}
-                                title="Steer joins the running work; off queues a follow-up"
+                            html`<div
+                                class="mode-switch"
+                                role="radiogroup"
+                                aria-label="Send as"
+                                onKeyDown=${(event) => {
+                                    // Arrows move between the two, as in any group of radio buttons.
+                                    if (/^Arrow(Left|Right|Up|Down)$/.test(event.key)) {
+                                        const group = event.currentTarget;
+
+                                        event.preventDefault();
+                                        setSteer(!steer);
+                                        requestAnimationFrame(() =>
+                                            group.querySelector('[aria-checked="true"]')?.focus(),
+                                        );
+                                    }
+                                }}
                             >
-                                Steer
-                            </button>`
+                                ${[
+                                    [true, "Steer", "Pi reads it now, between steps"],
+                                    [false, "Queue", "Pi reads it when this run ends"],
+                                ].map(
+                                    ([value, label, tip]) => html`<button
+                                        role="radio"
+                                        aria-checked=${steer === value ? "true" : "false"}
+                                        tabindex=${steer === value ? "0" : "-1"}
+                                        class=${steer === value ? "on" : ""}
+                                        title=${tip}
+                                        onClick=${() => setSteer(value)}
+                                    >
+                                        ${label}
+                                    </button>`,
+                                )}
+                            </div>`
                         }
                         <span class="grow"></span>
-                        ${
-                            busy &&
-                            html`<button
-                                class="round stop"
-                                aria-label="Stop"
-                                onClick=${() => attempt(actions.abort)}
-                            >
-                                <${Icon} name="stop" size=${16} />
-                            </button>`
-                        }
-                        ${
-                            (!busy || text.trim() !== "" || files.length > 0) &&
-                            html`<button
-                                class="round send"
-                                aria-label="Send"
-                                disabled=${!canSend}
-                                onClick=${send}
-                            >
-                                ${
-                                    sending
-                                        ? html`<${Spinner} />`
-                                        : html`<${Icon} name="send" size=${18} />`
-                                }
-                            </button>`
-                        }
+                        ${busy && html`<${StopButton} />`}
+                        <${MicButton} dictation=${dictation} class="composer-mic" />
+                        <button
+                            class=${`send-button ${canSend ? "ready" : ""}`}
+                            aria-label="Send"
+                            title=${coarse ? "Send" : "Send (Enter)"}
+                            disabled=${!canSend}
+                            onClick=${send}
+                        >
+                            ${
+                                sending
+                                    ? html`<${Spinner} />`
+                                    : html`<${Icon} name="send" size=${16} stroke=${2.4} />`
+                            }
+                        </button>
                     </div>
                 </div>`
         }
         <${StatusLine} />
     </footer>`;
+}
+
+/**
+ * The message box grows with what is written, to 40% of the screen; its least height (two lines, or one on a short
+ * screen) is the stylesheet's, and changes with the screen.
+ */
+function fitBox(element) {
+    if (!element) {
+        return;
+    }
+
+    element.style.height = "auto";
+    element.style.height = `${Math.min(element.scrollHeight, innerHeight * 0.4)}px`;
+}
+
+/** A model's short name for the message box: "opus 4.5" for "Claude Opus 4.5". */
+const shortModel = (agent) =>
+    modelLabel(agent)
+        // A provider's own prefix ("Anthropic: Claude Opus 4.5"), then the family's name.
+        .replace(/^[^:]{1,24}:\s*/, "")
+        .replace(/^(?:anthropic\s+)?claude\s+/i, "")
+        .toLowerCase();
+
+/** Stop the run: a square in the failure color. */
+function StopButton() {
+    return html`<button
+        class="stop-button"
+        aria-label="Stop"
+        title="Stop (Esc twice)"
+        onClick=${() => attempt(actions.abort)}
+    >
+        <span class="stop-square" aria-hidden="true"></span>
+    </button>`;
 }
 
 /**
@@ -1165,6 +1360,7 @@ function PlacesButton() {
     </button>`;
 }
 
+/** Under the message box: who is here, how full the context is, the cache, the spend, and Lancet Guard. */
 function StatusLine() {
     const { view, connection, guard } = store.state;
     const stats = view.stats ?? {};
@@ -1179,23 +1375,8 @@ function StatusLine() {
         );
     }
 
-    // The git branch, first as in an editor's status bar: a tap switches it.
-    if (view.branch) {
-        const label = html`<${Icon} name="fork" size=${11} />
-            <span>${headLabel(view.branch)}</span>`;
-
-        parts.push(
-            branchAvailable()
-                ? html`<button
-                      class="branch"
-                      title=${view.branch.detached ? "No branch: switch to one" : "Switch or make a branch"}
-                      onClick=${() => openSheet({ type: "branch" })}
-                  >
-                      ${label}
-                  </button>`
-                : html`<span class="branch" title="The git branch">${label}</span>`,
-        );
-    }
+    // People, not tabs: one person with a phone and a laptop open is one here (presence has a row per person).
+    const here = store.state.presence.length || view.viewers?.length || 1;
 
     // Speed of the newest response: its tokens per second and its time to first token.
     if (stats.tokensPerSec !== undefined) {
@@ -1215,52 +1396,43 @@ function StatusLine() {
         parts.push(html`<span title="Time to first token of the last response">${ttft} TTFT</span>`);
     }
 
+    if (window) {
+        const used = stats.contextTokens ?? 0;
+        const percent = Math.min(100, Math.round((used / window) * 100));
+        // Compacted since the last answer: what is left, estimated until the next answer measures it.
+        const about = stats.contextEstimated ? "~" : "";
+        const title = `${about}${formatTokens(used)} of ${formatTokens(window)} tokens in context`;
+
+        parts.push(
+            html`<span class="context" title=${title}>
+                context
+                <span class="meter" aria-hidden="true">
+                    <span style=${`width:${percent}%`}></span>
+                </span>
+                ${about}${percent}%
+            </span>`,
+        );
+    }
+
     if (stats.cacheRate !== undefined) {
         parts.push(html`<span>cache ${Math.round(stats.cacheRate * 100)}%</span>`);
     }
 
-    if (window) {
-        const percent = stats.contextTokens ? Math.round((stats.contextTokens / window) * 100) : 0;
-
-        parts.push(html`<span>${percent}%/${formatTokens(window)}</span>`);
-    }
-
     // On but not loaded: the guard blocks bash, write, and edit until it loads or is turned off.
-    if (guard?.enabled && guard.available === false) {
+    const failed = guard?.enabled && guard.available === false;
+
+    if (guard?.enabled || guard?.available) {
         parts.push(
             html`<button
-                class="guard off"
+                class=${`guard ${guard.enabled && !failed ? "" : "off"}`}
                 title=${guard.detail}
                 onClick=${() => openSheet({ type: "extensions" })}
             >
-                <${Icon} name="shield" size=${11} /> guard failed
-            </button>`,
-        );
-    } else if (guard?.enabled) {
-        parts.push(
-            html`<button
-                class="guard"
-                title=${guard.detail}
-                onClick=${() => openSheet({ type: "extensions" })}
-            >
-                <${Icon} name="shield" size=${11} /> guard
-            </button>`,
-        );
-    } else if (guard?.available) {
-        parts.push(
-            html`<button
-                class="guard off"
-                title=${guard.detail}
-                onClick=${() => openSheet({ type: "extensions" })}
-            >
-                <${Icon} name="shield" size=${11} /> guard off
+                <${Icon} name="shield" size=${11} />
+                ${failed ? "guard failed" : guard.enabled ? "guard on" : "guard off"}
             </button>`,
         );
     }
 
-    return html`<div class="status-line">
-        ${parts.flatMap((part, index) =>
-            index === 0 ? [part] : [html`<span class="dot">·</span>`, part],
-        )}
-    </div>`;
+    return html`<div class="status-line">${parts}</div>`;
 }

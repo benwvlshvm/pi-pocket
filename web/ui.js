@@ -181,9 +181,8 @@ function richKind(name, source) {
 }
 
 /**
- * A code block as the app draws it: its language and a copy button above it (or the button alone, over it), its code
- * colored, and a long one folded. A block that shows something besides its code is marked with its kind for
- * `markdownParts`.
+ * A code block as the app draws it: a bar with its language (or "text") and a copy button above it, its code colored,
+ * and a long one folded. A block that shows something besides its code is marked with its kind for `markdownParts`.
  */
 function codeBlock(pre, fold) {
     const source = pre.textContent ?? "";
@@ -211,18 +210,14 @@ function codeBlock(pre, fold) {
         wrap.dataset.lang = name;
     }
 
-    if (name) {
-        const head = document.createElement("div");
-        const label = document.createElement("span");
+    const head = document.createElement("div");
+    const label = document.createElement("span");
 
-        head.className = "code-head";
-        label.className = "code-lang";
-        label.textContent = name;
-        head.append(label, copy);
-        wrap.append(head, pre);
-    } else {
-        wrap.append(copy, pre);
-    }
+    head.className = "code-head";
+    label.className = "code-lang";
+    label.textContent = name || "text";
+    head.append(label, copy);
+    wrap.append(head, pre);
 
     const lines = source.split("\n").length;
 
@@ -699,10 +694,13 @@ export function shortPath(path, home) {
 
 const ICONS = {
     menu: "M3 6h18M3 12h18M3 18h18",
+    // PiP: a small orb with a glint.
+    pip: "M12 20a8 8 0 100-16 8 8 0 000 16zM8.5 11a3.5 3.5 0 013.5-3.5",
     more: "M5 12h.01M12 12h.01M19 12h.01",
     close: "M6 6l12 12M18 6L6 18",
     send: "M12 19V5M5 12l7-7 7 7",
     stop: "M7 7h10v10H7z",
+    mic: "M12 3a3 3 0 00-3 3v6a3 3 0 006 0V6a3 3 0 00-3-3zM19 11a7 7 0 01-14 0M12 18v3",
     clip: "M21 11.5l-8.6 8.6a5 5 0 01-7.1-7.1l8.6-8.6a3.3 3.3 0 014.7 4.7l-8.6 8.6a1.7 1.7 0 01-2.4-2.4l7.9-7.9",
     plus: "M12 5v14M5 12h14",
     artifact: "M4 5h16v14H4zM4 9h16M8 5v4",
@@ -743,6 +741,8 @@ const ICONS = {
     monitor: "M3 4h18v12H3zM8 20h8M12 16v4",
     terminal: "M4 5h16v14H4zM8 10l2 2-2 2M12 14h4",
     fit: "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5",
+    // Compact: two rules, and what is between them pressed toward the middle.
+    compact: "M4 3h16M4 21h16M12 6v5M9 8l3 3 3-3M12 18v-5M9 16l3-3 3 3",
 };
 
 /** An icon's SVG path, for marks drawn outside Preact (gestures.js). */
@@ -778,7 +778,7 @@ export function Marked({ text, hits }) {
     return parts;
 }
 
-export function Icon({ name, size = 20, class: className = "" }) {
+export function Icon({ name, size = 20, class: className = "", stroke = 2 }) {
     return html`<svg
         class=${`icon ${className}`}
         width=${size}
@@ -786,7 +786,7 @@ export function Icon({ name, size = 20, class: className = "" }) {
         viewBox="0 0 24 24"
         fill="none"
         stroke="currentColor"
-        stroke-width="2"
+        stroke-width=${stroke}
         stroke-linecap="round"
         stroke-linejoin="round"
         aria-hidden="true"
@@ -796,11 +796,14 @@ export function Icon({ name, size = 20, class: className = "" }) {
 }
 
 /**
- * The app's loaders, after Omarchy's: a quadrant block that steps around a square like a terminal spinner, a flat bar
- * that eases toward 70% the way Omarchy's boot screen does while it waits, and a sweep of square cells for "thinking".
+ * The app's loaders, after Omarchy's: a quadrant block that steps around a square like a terminal spinner, and a flat
+ * bar that eases toward 70% the way Omarchy's boot screen does while it waits.
  */
-export function Spinner({ label = "Working" }) {
-    return html`<span class="spinner" role="img" aria-label=${label}></span>`;
+export function Spinner({ label = "Working", hidden = false }) {
+    // Hidden from screen readers beside words that say the same.
+    return hidden
+        ? html`<span class="spinner" aria-hidden="true"></span>`
+        : html`<span class="spinner" role="img" aria-label=${label}></span>`;
 }
 
 /** A spinner with a short line about what is loading, for sheets and panels. */
@@ -821,18 +824,72 @@ export function Boot({ caption = "starting", detail = "", inline = false }) {
     </div>`;
 }
 
-/** Pi is working on an answer: a block sweeping across square cells. */
-export function Thinking() {
-    return html`<div class="thinking" role="status" aria-label="Pi is thinking">
-        <span></span>
-        <span></span>
-        <span></span>
-        <span></span>
-        <span></span>
-        <span></span>
-        <span></span>
-        <span></span>
-    </div>`;
+/** The element each edge was last published from (`useEdge`): one replacing another is not undone as the old goes. */
+const edges = new Map();
+
+/**
+ * A ref that keeps `name` (a CSS variable on the page's root) at where its element reaches, `measure(rect)` px, as it
+ * or the window resizes; unset while the element is hidden or gone. PiP's window keeps clear of the session's top bar
+ * with it (`--topbar-h`).
+ */
+export function useEdge(name, measure) {
+    const [ref] = useState(() => {
+        let stop = null;
+
+        const publish = (element) => {
+            const root = document.documentElement;
+
+            const update = () => {
+                // Another element took the name since (a frame queued before this one went): it says, not this one.
+                if (edges.get(name) !== element) {
+                    return;
+                }
+
+                const rect = element.getBoundingClientRect();
+
+                if (rect.height === 0) {
+                    root.style.removeProperty(name);
+                } else {
+                    root.style.setProperty(name, `${Math.max(0, Math.round(measure(rect)))}px`);
+                }
+            };
+
+            const observer = new ResizeObserver(update);
+            // A pane popping in (`popin` scales it) moves the element without resizing it: measured again as an
+            // animation around it ends.
+            let frame = 0;
+
+            const settled = () => {
+                cancelAnimationFrame(frame);
+                frame = requestAnimationFrame(update);
+            };
+
+            edges.set(name, element);
+            observer.observe(element);
+            addEventListener("resize", update);
+            document.addEventListener("animationend", settled);
+            update();
+
+            return () => {
+                observer.disconnect();
+                removeEventListener("resize", update);
+                document.removeEventListener("animationend", settled);
+                cancelAnimationFrame(frame);
+
+                if (edges.get(name) === element) {
+                    edges.delete(name);
+                    root.style.removeProperty(name);
+                }
+            };
+        };
+
+        return (element) => {
+            stop?.();
+            stop = element ? publish(element) : null;
+        };
+    });
+
+    return ref;
 }
 
 /**
@@ -1023,9 +1080,10 @@ export function Sheet({ title, onClose, children, wide = false, actions = null }
 }
 
 /**
- * Where a menu opens from the control `selector` names: above it and aligned with it, within what shows of the page (a
- * phone's keyboard can cover it), and as tall as its rows need up to a menu's height. Null, for the middle of the
- * screen, when the control is gone or scrolled away, or has too little room above it.
+ * Where a menu opens from the control `selector` names: above it and aligned with it, or below it for a control near the
+ * top of the screen, within what shows of the page (a phone's keyboard can cover it), and as tall as its rows need up to
+ * a menu's height. Null, for the middle of the screen, when the control is gone or scrolled away, or has too little
+ * room on either side.
  */
 export function popAnchor(selector) {
     const rect = document.querySelector(selector)?.getBoundingClientRect();
@@ -1036,27 +1094,32 @@ export function popAnchor(selector) {
 
     const top = visualViewport?.offsetTop ?? 0;
     const bottom = top + (visualViewport?.height ?? innerHeight);
-    const at = Math.min(rect.top, bottom - 8);
-    const room = at - top - 14;
 
-    if (rect.bottom < top || room < 220) {
+    // Scrolled away above. One under a phone's keyboard opens from the keyboard's top edge.
+    if (rect.bottom < top) {
         return null;
     }
 
     const width = Math.min(420, innerWidth - 16);
+    const left = Math.max(8, Math.min(rect.left, innerWidth - width - 8));
+    const at = Math.min(rect.top, bottom - 8);
+    const above = at - top - 14;
 
-    return {
-        left: Math.max(8, Math.min(rect.left, innerWidth - width - 8)),
-        bottom: innerHeight - at + 6,
-        width,
-        height: Math.min(540, room),
-    };
+    if (above >= 220) {
+        return { left, bottom: innerHeight - at + 6, width, height: Math.min(540, above) };
+    }
+
+    const below = bottom - rect.bottom - 14;
+
+    return below >= 220 && rect.bottom <= bottom
+        ? { left, top: rect.bottom + 6, width, height: Math.min(540, below), down: true }
+        : null;
 }
 
 /** A `popAnchor` as a menu's style: nothing for the middle of the screen. */
 export const anchorStyle = (anchor) =>
     anchor
-        ? `left:${anchor.left}px;bottom:${anchor.bottom}px;width:${anchor.width}px;max-height:${anchor.height}px`
+        ? `left:${anchor.left}px;${anchor.down ? `top:${anchor.top}px` : `bottom:${anchor.bottom}px`};width:${anchor.width}px;max-height:${anchor.height}px`
         : "";
 
 /** The short name of a model for chips: "Claude Opus 5.5" stays, long ids lose their date suffix. */
@@ -1089,4 +1152,13 @@ export function item(label, run, hint) {
         <span>${label}</span>
         ${hint && html`<span class="muted small">${hint}</span>`}
     </button>`;
+}
+
+/** Posted JSON laid out for people (Pi gets it compact); anything else as it came. */
+export function readable(text) {
+    try {
+        return JSON.stringify(JSON.parse(text), null, 2);
+    } catch {
+        return text;
+    }
 }

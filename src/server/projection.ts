@@ -2,11 +2,14 @@
  * What browsers get: compact, display-ready JSON derived from the committed conversation view. Big strings (file
  * contents in tool arguments, long tool output) are clipped; a client asks for the full entry when the user expands it.
  */
+import { estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import type { EntryRecord, LiveState, UsageState } from "@earendil-works/pi-durable";
 import {
     ATTACHMENTS_HEADING,
     FILE_BLOCK,
+    FROM_PI_ENTRY,
     FROM_PREFIX,
+    type FromPiData,
     NOTE_ENTRY,
     SHELL_ENTRY,
     type ShellData,
@@ -29,8 +32,17 @@ export type ClientBlock =
           clipped?: Record<string, number>;
       };
 
+/** `at`: when the message was made, by the server's clock (milliseconds), where the message says. */
 export type ClientEntry =
-    | { id: number; kind: "user"; text: string; images: number; from?: string; files?: string[] }
+    | {
+          id: number;
+          kind: "user";
+          text: string;
+          images: number;
+          from?: string;
+          files?: string[];
+          at?: number;
+      }
     | {
           id: number;
           kind: "assistant";
@@ -39,6 +51,7 @@ export type ClientEntry =
           error?: string;
           model?: string;
           provider?: string;
+          at?: number;
       }
     | {
           id: number;
@@ -47,6 +60,7 @@ export type ClientEntry =
           name: string;
           text: string;
           isError: boolean;
+          at?: number;
           details?: unknown;
           clipped?: number;
           /** Image parts in the result; browsers load them from `/api/c/:id/image/:entry/:index`. */
@@ -56,6 +70,7 @@ export type ClientEntry =
     | { id: number; kind: "reset"; text?: string }
     | ({ id: number; kind: "shell"; truncated?: number } & ShellData)
     | { id: number; kind: "note"; text: string; name: string }
+    | { id: number; kind: "fromPi"; title: string; file: string }
     | { id: number; kind: "other"; entryKind: string };
 
 export type ClientToolSlot = {
@@ -247,6 +262,13 @@ function projectDetails(details: unknown, full: boolean): unknown {
     return undefined;
 }
 
+/** When a message was made, as `{ at }`, or nothing when it does not say. */
+function madeAt(message: Record<string, unknown> | undefined): { at?: number } {
+    const at = message?.timestamp;
+
+    return typeof at === "number" && Number.isFinite(at) && at > 0 ? { at } : {};
+}
+
 /** One entry for the browser, or undefined for bookkeeping entries the UI does not show. */
 export function projectEntry(entry: EntryRecord, full = false): ClientEntry | undefined {
     const message = entry.model?.[0] as Record<string, unknown> | undefined;
@@ -274,7 +296,7 @@ export function projectEntry(entry: EntryRecord, full = false): ClientEntry | un
             const prefixed = FROM_PREFIX.exec(text);
 
             return prefixed === null
-                ? { id, kind: "user", text, images, ...named }
+                ? { id, kind: "user", text, images, ...named, ...madeAt(message) }
                 : {
                       id,
                       kind: "user",
@@ -282,6 +304,7 @@ export function projectEntry(entry: EntryRecord, full = false): ClientEntry | un
                       images,
                       from: prefixed[1]!,
                       ...named,
+                      ...madeAt(message),
                   };
         }
 
@@ -300,6 +323,7 @@ export function projectEntry(entry: EntryRecord, full = false): ClientEntry | un
                 ...(error === undefined ? {} : { error }),
                 ...(typeof message?.model === "string" ? { model: message.model } : {}),
                 ...(typeof message?.provider === "string" ? { provider: message.provider } : {}),
+                ...madeAt(message),
             };
         }
 
@@ -320,6 +344,7 @@ export function projectEntry(entry: EntryRecord, full = false): ClientEntry | un
                 ...(details === undefined ? {} : { details }),
                 ...(clipped === undefined ? {} : { clipped }),
                 ...(images === 0 ? {} : { images }),
+                ...madeAt(message),
             };
         }
 
@@ -334,6 +359,20 @@ export function projectEntry(entry: EntryRecord, full = false): ClientEntry | un
 
         case "pi.system":
             return undefined;
+
+        case FROM_PI_ENTRY: {
+            const data = entry.data as Partial<FromPiData> | undefined;
+
+            // The file's name only: its folder is in the owner's home, which others need not see.
+            return {
+                id,
+                kind: "fromPi",
+                title: String(data?.title ?? ""),
+                file: String(data?.file ?? "")
+                    .split("/")
+                    .pop()!,
+            };
+        }
 
         case NOTE_ENTRY: {
             const data = entry.data as { text?: unknown; name?: unknown } | undefined;
@@ -426,6 +465,11 @@ export type ClientStats = {
     avgSamples?: number;
     /** The newest response's own prompt split, for the context composition bar. */
     lastPrompt?: { input: number; cacheRead: number; cacheWrite: number };
+    /**
+     * `contextTokens` is an estimate: no response came since the context was compacted or started fresh, so it is what
+     * the summary and the messages kept come to, without the prompt.
+     */
+    contextEstimated?: boolean;
 };
 
 type UsageNumbers = {
@@ -470,11 +514,27 @@ export function projectStats(
     let ttftMs: number | undefined;
     const samples: { output: number; windowMs: number; ttft: number }[] = [];
     let lastPrompt: ClientStats["lastPrompt"];
+    let contextEstimated = false;
+    // The newest compaction or fresh start: a response before it measured a context that is gone. By id, not place: a
+    // conversation's view puts its head marker first, before the messages it keeps.
+    let boundary: EntryRecord | undefined;
+
+    for (const entry of entries) {
+        if (
+            (entry.kind === "pi.compaction" || entry.kind === "pi.reset") &&
+            entry.id > (boundary?.id ?? Number.NEGATIVE_INFINITY)
+        ) {
+            boundary = entry;
+        }
+    }
 
     for (let index = entries.length - 1; index >= 0; index--) {
         const entry = entries[index]!;
 
-        if (entry.kind !== "pi.assistant") {
+        if (
+            entry.kind !== "pi.assistant" ||
+            entry.id < (boundary?.id ?? Number.NEGATIVE_INFINITY)
+        ) {
             continue;
         }
 
@@ -524,6 +584,28 @@ export function projectStats(
     const streamMs = samples.reduce((sum, sample) => sum + sample.windowMs, 0);
     const streamTokens = samples.reduce((sum, sample) => sum + sample.output, 0);
 
+    // Nothing measured since: what the summary and the messages kept after it come to, until an answer measures it.
+    if (contextTokens === undefined && boundary !== undefined) {
+        const head = boundary.head ?? boundary.id;
+
+        let estimate = 0;
+
+        try {
+            for (const kept of entries) {
+                if (kept.id >= head) {
+                    for (const message of kept.model ?? []) {
+                        estimate += estimateMessageTokens(message);
+                    }
+                }
+            }
+
+            contextTokens = estimate;
+            contextEstimated = true;
+        } catch {
+            // A message the estimate cannot read: no figure, rather than no view.
+        }
+    }
+
     return {
         cost,
         ...(prompt > 0 ? { cacheRate: cacheRead / prompt } : {}),
@@ -538,6 +620,7 @@ export function projectStats(
                   avgSamples: samples.length,
               }
             : {}),
+        ...(contextEstimated ? { contextEstimated } : {}),
     };
 }
 
@@ -699,6 +782,9 @@ export function peekLines(
                 break;
             case "reset":
                 lines.push({ kind: "event", text: "Context cleared" });
+                break;
+            case "fromPi":
+                lines.push({ kind: "event", text: "Continued from Pi in the terminal" });
                 break;
             default:
                 break;

@@ -32,13 +32,16 @@ import {
     type Pin,
     PinsDoc,
     PlanDoc,
+    type PrWatch,
     ReactionsDoc,
     type Schedule,
     ScheduleDoc,
     type SubagentRecord,
+    STOPPED,
     SubagentsDoc,
     type Turns,
     TurnsDoc,
+    WatchDoc,
 } from "./docs.ts";
 import { SHELL_ENTRY } from "./entry-format.ts";
 import { agentInfo } from "./models.ts";
@@ -70,6 +73,7 @@ export const ROOM_DOCS = new Set(
         PlanDoc,
         ScheduleDoc,
         GoalDoc,
+        WatchDoc,
     ].map((doc) => doc.definition.kind),
 );
 /** A typing indicator lasts this long unless the browser renews it. */
@@ -123,6 +127,21 @@ export interface Client {
     peeks?: Set<ConversationId>;
     /** The number of the last peek list taken, so one that arrives late does not undo a newer one. */
     peekSeq?: number;
+    /** This tab shows the subagents board: it gets every subagent with each session list (`PocketApp.setBoard`). */
+    board?: boolean;
+    /** The number of the last board request taken, so one that arrives late does not undo a newer one. */
+    boardSeq?: number;
+    /** The JSON of the subagents this tab's board last got, so an unchanged list is not sent again. */
+    boardSent?: string;
+    /**
+     * This tab's PiP panel, while open: a view of PiP's conversation beside the one the tab shows, which reaches the tab
+     * as `pipview` events (`PocketApp.setPip`).
+     */
+    pip?: Client;
+    /** The number of the last PiP panel request taken, so one that arrives late does not undo a newer one. */
+    pipSeq?: number;
+    /** The JSON of the PiP state this tab last got (`pip` events), so an unchanged one is not sent again. */
+    pipSent?: string;
 }
 
 export type TypingPlace = "chat" | "pi";
@@ -135,6 +154,47 @@ export type Person = {
     typing?: TypingPlace;
     away?: boolean;
 };
+
+/** The subagents with a report on its way: waiting in the outbox, or in the batch sent and still queued. */
+export function reportingOf(
+    doc:
+        | {
+              outbox?: readonly { name: string }[];
+              sending?: { reports: readonly { name: string }[] };
+          }
+        | null
+        | undefined,
+): Set<string> {
+    return new Set(
+        [...(doc?.outbox ?? []), ...(doc?.sending?.reports ?? [])].map((report) => report.name),
+    );
+}
+
+/**
+ * One subagent as the web app shows it, in its parent's subagents bar and on the subagents board: what it was asked and
+ * when, whether it works, and how it ended (`stopped` is a `failed` that was stopped).
+ */
+export function subagentView(
+    name: string,
+    record: SubagentRecord,
+    busy: boolean,
+    reporting: boolean,
+) {
+    return {
+        name,
+        conversationId: record.conversationId,
+        busy,
+        ...(record.asked === undefined ? {} : { asked: record.asked }),
+        ...(record.askedAt === undefined ? {} : { askedAt: record.askedAt }),
+        ...(record.answeredAt === undefined ? {} : { answeredAt: record.answeredAt }),
+        ...(record.failed === true ? { failed: true } : {}),
+        ...(record.failed === true && record.error === STOPPED ? { stopped: true } : {}),
+        ...(record.failed === true && record.error !== undefined && record.error !== STOPPED
+            ? { error: record.error }
+            : {}),
+        ...(reporting ? { reporting: true } : {}),
+    };
+}
 
 /** The view of one conversation, shared by every client attached to it. */
 export class Room {
@@ -157,6 +217,10 @@ export class Room {
     authors: Record<string, string> = {};
     artifacts: Record<string, ArtifactMeta> = {};
     subagents: Record<string, SubagentRecord> = {};
+    /** The subagents whose reports are on their way to this conversation: waiting, or sent and still queued. */
+    #reporting = new Set<string>();
+    /** Why their reports wait, while a spend limit holds them back. */
+    #held: string | undefined;
     chat: ChatMessage[] = [];
     reactions: Record<string, Record<string, string[]>> = {};
     pins: Pin[] = [];
@@ -166,6 +230,7 @@ export class Room {
     plan: { on: boolean; by?: string; at?: number } = { on: false };
     schedules: Record<string, Schedule> = {};
     goal: Goal | undefined;
+    watch: PrWatch | undefined;
     /** Who is typing where, by user id. Memory only: it means nothing after a restart. */
     readonly #typing = new Map<string, { where: TypingPlace; timer: NodeJS.Timeout }>();
     parent: { id: ConversationId; title: string } | undefined;
@@ -187,9 +252,11 @@ export class Room {
         this.artifacts = {
             ...((await harness.snapshot(ArtifactsDoc, this.id, context))?.items ?? {}),
         } as Record<string, ArtifactMeta>;
-        this.subagents = {
-            ...((await harness.snapshot(SubagentsDoc, this.id, context))?.agents ?? {}),
-        } as Record<string, SubagentRecord>;
+        const subagents = await harness.snapshot(SubagentsDoc, this.id, context);
+
+        this.subagents = { ...(subagents?.agents ?? {}) } as Record<string, SubagentRecord>;
+        this.#reporting = reportingOf(subagents);
+        this.#held = subagents?.held;
         this.chat = [
             ...((await harness.snapshot(ChatDoc, this.id, context))?.messages ?? []),
         ] as ChatMessage[];
@@ -217,6 +284,7 @@ export class Room {
             ...((await harness.snapshot(ScheduleDoc, this.id, context))?.items ?? {}),
         };
         this.goal = (await harness.snapshot(GoalDoc, this.id, context))?.goal;
+        this.watch = (await harness.snapshot(WatchDoc, this.id, context))?.watch;
 
         if (owner !== undefined) {
             const siblings =
@@ -286,6 +354,8 @@ export class Room {
             this.schedules = { ...((value?.items as Record<string, Schedule>) ?? {}) };
         } else if (kind === GoalDoc.definition.kind) {
             this.goal = (value?.goal as Goal | undefined) ?? undefined;
+        } else if (kind === WatchDoc.definition.kind) {
+            this.watch = (value?.watch as PrWatch | undefined) ?? undefined;
         }
 
         if (kind === AuthorsDoc.definition.kind) {
@@ -294,6 +364,8 @@ export class Room {
             this.artifacts = { ...((value?.items as Record<string, ArtifactMeta>) ?? {}) };
         } else if (kind === SubagentsDoc.definition.kind) {
             this.subagents = { ...((value?.agents as Record<string, SubagentRecord>) ?? {}) };
+            this.#reporting = reportingOf(value as Parameters<typeof reportingOf>[0]);
+            this.#held = typeof value?.held === "string" ? value.held : undefined;
         }
 
         this.schedule();
@@ -395,11 +467,16 @@ export class Room {
                     createdAt: version.createdAt,
                 })),
             })),
-            subagents: Object.entries(this.subagents).map(([name, record]) => ({
-                name,
-                conversationId: record.conversationId,
-                busy: this.#app.isBusy(record.conversationId),
-            })),
+            subagents: Object.entries(this.subagents).map(([name, record]) =>
+                subagentView(
+                    name,
+                    record,
+                    this.#app.isBusy(record.conversationId),
+                    this.#reporting.has(name),
+                ),
+            ),
+            // Reports on their way that a spend limit holds back, and why: the subagents bar says so.
+            subagentsHeld: this.#reporting.size > 0 ? (this.#held ?? null) : null,
             authors: this.authors,
             reactions: this.reactions,
             pins: this.pins,
@@ -428,6 +505,25 @@ export class Room {
                           tries: this.goal.tries,
                           max: this.goal.max,
                           ...(this.goal.last === undefined ? {} : { last: this.goal.last }),
+                      },
+            // The session's PR watch, as its bar shows it.
+            watch:
+                this.watch === undefined
+                    ? null
+                    : {
+                          number: this.watch.number,
+                          url: this.watch.url,
+                          title: this.watch.title,
+                          status: this.watch.status,
+                          checks: this.watch.checks ?? null,
+                          sent: this.watch.sent,
+                          max: this.watch.max,
+                          note: this.watch.note ?? null,
+                          // A note with no failed looks says why it waits (someone else drives).
+                          errors: this.watch.errors,
+                          by: this.watch.by,
+                          // Only the owner's comments count: gh cannot push to the repository.
+                          ...(this.watch.unchecked === true ? { unchecked: true } : {}),
                       },
         };
 
@@ -548,10 +644,14 @@ export class Room {
                 recent.reverse(),
                 projectLive(view.docs["pi.live"] as LiveState | undefined),
             ),
-            // A subagent's calls wait on its session's tile, as they make the session wait.
+            // Its own calls waiting for someone; for a session, its subagents' too, as they make the session wait.
             approvals: this.#app.approvals
                 .all()
-                .filter((request) => this.#app.rootOf(request.conversationId) === this.id)
+                .filter(
+                    (request) =>
+                        request.conversationId === this.id ||
+                        this.#app.rootOf(request.conversationId) === this.id,
+                )
                 .map((request) => ({
                     id: request.id,
                     conversationId: request.conversationId,
