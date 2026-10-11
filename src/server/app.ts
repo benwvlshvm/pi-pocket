@@ -81,12 +81,7 @@ import { Pip, PIP_EXTENSION } from "./pip.ts";
 import { PIP_COMPACT_CHOICES, PipCompaction } from "./pip-compact.ts";
 import { RepoWatches } from "./repo-watches.ts";
 import { snippet } from "./projection.ts";
-import {
-    loadPromptTemplates,
-    loadSkillCommands,
-    type PromptTemplate,
-    type SkillCommand,
-} from "./prompts.ts";
+import { loadPromptTemplates, type PromptTemplate, type SkillCommand } from "./prompts.ts";
 import { measureModelStreams } from "./timing.ts";
 import { Providers } from "./providers.ts";
 import { PushStore } from "./push.ts";

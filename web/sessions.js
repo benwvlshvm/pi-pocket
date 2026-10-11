@@ -244,10 +244,11 @@ function SessionRow({ session, index, number, needle, selected, folders, onPick,
     const fork = !session.waiting && (live > 0 || failed > 0);
     const person = collab() ? (session.people ?? []).find((each) => each.id !== me?.id) : undefined;
     // Archive and pin show on hover; an archived session only comes back, and only for people who steer.
-    const acts = (canSteer() ? 1 : 0) + (session.archived ? 0 : 1);
+    // Live rows hold archive, pin, and mark-unread; an archived one keeps only its unarchive.
+    const acts = (canSteer() ? 1 : 0) + (session.archived ? 0 : 2);
 
     return html`<div
-        class=${`session-row ${open ? "active" : ""} ${selected ? "selected" : ""} ${moving ? "moving" : ""} ${marked ? "marked-unread" : ""} ${["no-acts", "one-act", ""][acts]}`}
+        class=${`session-row ${open ? "active" : ""} ${selected ? "selected" : ""} ${moving ? "moving" : ""} ${marked ? "marked-unread" : ""} ${["no-acts", "one-act", "", "three-acts"][acts]}`}
         data-id=${session.id}
         style=${`--i:${index}`}
     >
