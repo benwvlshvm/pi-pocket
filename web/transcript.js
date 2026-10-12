@@ -21,7 +21,7 @@ import {
     store,
     TRANSCRIPT_ROWS,
 } from "./store.js";
-import { stateOf } from "./subagents.js";
+import { openSubagent, stateOf } from "./subagents.js";
 import {
     diffCounts,
     itemsOf,
@@ -211,7 +211,7 @@ function Report({ report, view, fresh }) {
             <span class="report-name">${name}</span> ${verb}
             ${
                 child &&
-                html`<button class="link" onClick=${() => navigate(child.conversationId)}>
+                html`<button class="link" onClick=${() => openSubagent(child.conversationId)}>
                     Open →
                 </button>`
             }
@@ -900,7 +900,7 @@ function ToolStep({
                 html`<button
                     class="step-open"
                     title=${`Open ${args.name ?? "the subagent"}`}
-                    onClick=${() => navigate(child)}
+                    onClick=${() => openSubagent(child)}
                 >
                     Open →
                 </button>`
@@ -2199,12 +2199,6 @@ export function Transcript() {
 
     return html`<main class="scroller" ref=${scroller} onScroll=${onScroll}>
         <div class="transcript">
-            ${
-                conversation.parent &&
-                html`<button class="breadcrumb" onClick=${() => navigate(conversation.parent.id)}>
-                    <${Icon} name="back" size=${14} /> ${conversation.parent.title}
-                </button>`
-            }
             ${
                 conversation.forkedFrom &&
                 sessionsLoaded &&
