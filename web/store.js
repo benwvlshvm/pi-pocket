@@ -113,6 +113,8 @@ export const store = {
         browserOpen: sessionStorage.getItem("pocket.browser") === "1",
         /** The Files tile shows (`files-panel.js`); kept per tab, like the browser's. */
         filesOpen: sessionStorage.getItem("pocket.files") === "1",
+        /** The Spark panel shows (`spark-panel.js`); kept per tab, like the browser's. */
+        sparkOpen: sessionStorage.getItem("pocket.spark") === "1",
         /** The Files tile's tab: `files` or `changes`. */
         filesTab: sessionStorage.getItem("pocket.filesTab") === "changes" ? "changes" : "files",
         /** The last file asked to open in the Files tile: `{ path, line, n }`, `n` telling requests apart. */
@@ -944,6 +946,8 @@ export const actions = {
     watchPr: (pr) => api(`c/${current()}/watch`, pr ? { pr } : {}),
     unwatchPr: () => api(`c/${current()}/watch`, { stop: true }),
     approve: (id, allow) => api(`approvals/${encodeURIComponent(id)}`, { allow }),
+    /** Ben's answers to a question Pi asked (`transcript.js`): the call returns them. */
+    answerQuestion: (id, answers) => api(`questions/${encodeURIComponent(id)}`, { answers }),
     /** `worktree`: the session works in a git worktree of its own, made from the folder. */
     createSession: (cwd, { worktree = false } = {}) =>
         api("sessions", { cwd, ...(worktree ? { worktree } : {}) }),
@@ -1016,12 +1020,14 @@ function sheetChange(sheet, state) {
     sessionStorage.setItem(PEOPLE_KEY, "1");
     sessionStorage.removeItem("pocket.browser");
     sessionStorage.removeItem("pocket.files");
+    sessionStorage.removeItem("pocket.spark");
 
     return {
         sheet: null,
         peopleOpen: true,
         browserOpen: false,
         filesOpen: false,
+        sparkOpen: false,
         peopleAsk: {
             tab: sheet.tab ?? null,
             highlight: sheet.highlight ?? null,

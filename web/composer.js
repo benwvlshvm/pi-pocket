@@ -27,6 +27,7 @@ import {
 } from "./store.js";
 import { useDock } from "./dock.js";
 import { SubagentsBar } from "./subagents.js";
+import { SparkPart, useSpark } from "./spark-panel.js";
 import { TrustBar } from "./trust.js";
 import { prefs } from "./theme.js";
 import { MicButton, useDictation } from "./voice.js";
@@ -1502,67 +1503,6 @@ function useStatusFit(ref) {
 const seconds = (ms) => (ms >= 10_000 ? `${Math.round(ms / 1000)}s` : `${(ms / 1000).toFixed(1)}s`);
 
 /**
- * The DGX Spark cluster's chip: "49W · 77° · 96%" for node 1, both nodes in the title, fresh every 5s while the tab
- * is up, and greyed when the dashboard is out of reach. Like Hermes's bottom widget: quiet, mono, no accents.
- */
-function SparkPart() {
-    const [spark, setSpark] = useState(undefined);
-
-    useEffect(() => {
-        let gone = false;
-        let timer;
-
-        const tick = async () => {
-            if (document.hidden === false) {
-                try {
-                    const response = await fetch("/api/spark");
-                    const data = response.ok ? await response.json() : null;
-
-                    if (!gone) {
-                        setSpark(data && data.error === undefined ? data : null);
-                    }
-                } catch {
-                    if (!gone) {
-                        setSpark(null);
-                    }
-                }
-            }
-
-            if (!gone) {
-                timer = setTimeout(tick, 5000);
-            }
-        };
-
-        tick();
-
-        return () => {
-            gone = true;
-            clearTimeout(timer);
-        };
-    }, []);
-
-    if (spark === undefined) {
-        return null;
-    }
-
-    if (spark === null) {
-        return html`<span class="spark offline" title="The DGX Spark dashboard is unreachable">dgx-offline</span>`;
-    }
-
-    const peer = spark.peer_host
-        ? `node2 ${Math.round(spark.peer_power_w)}W ${Math.round(spark.peer_gpu_temp)}° ${Math.round(spark.peer_gpu_util)}%`
-        : "node2 offline";
-
-    return html`<span
-        class="spark"
-        title=${`DGX Sparks: ${Math.round(spark.power_w)}W ${Math.round(spark.gpu_temp)}° ${Math.round(spark.gpu_util)}% · ${peer}`}
-    >
-        ${Math.round(spark.power_w)}W
-        <span class="rest"> · ${Math.round(spark.gpu_temp)}° · ${Math.round(spark.gpu_util)}%</span>
-    </span>`;
-}
-
-/**
  * How fast the newest answer came, once Appearance turns it on: its tokens a second, and how long its first token
  * took. Narrow, "42 tok/s · 1.2s"; an answer that came in one flush has no speed, only its wait.
  */
@@ -1607,6 +1547,7 @@ function SpeedPart({ stats }) {
  *  cache, the spend, and Lancet Guard. On one row: a narrow one takes shorter forms (`SHORTER`). */
 function StatusLine() {
     const { view, connection, guard } = store.state;
+    const spark = useSpark();
     const stats = view.stats ?? {};
     const window = view.agent?.contextWindow;
     const line = useRef(null);
@@ -1660,8 +1601,11 @@ function StatusLine() {
         parts.push(html`<span class="cache">cache ${Math.round(stats.cacheRate * 100)}%</span>`);
     }
 
-    // The Spark cluster's chip, before the spend so money stays at the line's end.
-    parts.push(html`<${SparkPart} />`);
+    // The Spark cluster's chip, before the spend so money stays at the line's end. Its poll lives here, so a fresh
+    // reading re-renders the line and its fit hears the new width.
+    parts.push(
+        html`<${SparkPart} spark=${spark.data === null && spark.error === undefined ? undefined : (spark.data ?? null)} />`,
+    );
 
     // The session's spend, its subagents' included, and its limit when it has one.
     const spend = view.conversation?.spend;

@@ -11208,3 +11208,374 @@ textarea.notes {
     border: 1px solid var(--line);
     border-radius: var(--radius);
 }
+
+/* ─── The Spark panel: the DGX cluster's telemetry, docked like the Browser panel ─── */
+
+.spark-panel {
+    --sp-acc: var(--accent);
+    --sp-warn: var(--warn);
+    --sp-err: var(--err);
+    --sp-ok: var(--ok);
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    animation: popin var(--t-in) var(--ease-out);
+}
+
+.spark-bar-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: calc(env(safe-area-inset-top) + 0.35rem) 0.75rem 0.35rem;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg);
+}
+
+.spark-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font: 600 0.8rem var(--mono);
+}
+
+.spark-clock {
+    margin-left: auto;
+    font: 0.72rem var(--mono);
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.spark-scroll {
+    flex: 1;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.spark-notice {
+    padding: 2.5rem 1rem;
+    color: var(--muted);
+    font-size: 0.86rem;
+}
+
+.spark-inner {
+    padding: 0.75rem 1rem 1.25rem;
+    max-width: 760px;
+}
+
+.spark-bank-h {
+    margin: 1.1rem 0 0.4rem;
+    font: 600 0.7rem var(--mono);
+    letter-spacing: 0.08em;
+    color: var(--text);
+}
+
+.spark-bank-h:first-child {
+    margin-top: 0.4rem;
+}
+
+.spark-bank-h .spark-note {
+    letter-spacing: 0;
+    font-weight: 400;
+}
+
+.spark-tile {
+    padding: 0.7rem 0 0.9rem;
+    border-bottom: 1px solid var(--line);
+}
+
+.spark-tile:last-child {
+    border-bottom: 0;
+}
+
+.spark-lbl {
+    font: 500 0.64rem var(--mono);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 0.45rem;
+}
+
+.spark-note {
+    color: var(--faint);
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+.spark-big {
+    font: 300 2.1rem var(--mono);
+    line-height: 1.1;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+
+.spark-big.warn,
+.spark-val.warn,
+.spark-n.warn {
+    color: var(--sp-warn);
+}
+
+.spark-big.hot,
+.spark-val.hot,
+.spark-n.hot {
+    color: var(--sp-err);
+}
+
+.spark-unit {
+    font-size: 0.72rem;
+    color: var(--muted);
+    margin-left: 0.35rem;
+    letter-spacing: 0;
+}
+
+.spark-state {
+    font: 500 0.6rem var(--mono);
+    letter-spacing: 0.14em;
+    color: var(--ok);
+    margin: 0.1rem 0 0.5rem;
+}
+
+.spark-state.warn {
+    color: var(--sp-warn);
+}
+
+.spark-state.hot {
+    color: var(--sp-err);
+}
+
+.spark-bar {
+    position: relative;
+    height: 10px;
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    overflow: hidden;
+    background: var(--card);
+}
+
+.spark-fill {
+    height: 100%;
+    background: var(--sp-acc);
+    opacity: 0.9;
+}
+
+.spark-bar.warn .spark-fill {
+    background: var(--sp-warn);
+}
+
+.spark-bar.hot .spark-fill {
+    background: var(--sp-err);
+}
+
+.spark-zones {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.spark-ticks {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 3px;
+    font: 0.58rem var(--mono);
+    color: var(--faint);
+}
+
+.spark-kv {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.15rem 1.1rem;
+    margin-top: 0.45rem;
+    font: 0.68rem var(--mono);
+    color: var(--muted);
+}
+
+.spark-kv b {
+    font-weight: 600;
+    color: var(--text);
+}
+
+.spark-kv .acc {
+    color: var(--sp-acc);
+}
+
+.spark-kv .err {
+    color: var(--sp-err);
+}
+
+.spark-dim {
+    margin-top: 0.4rem;
+    font: 0.62rem var(--mono);
+    color: var(--faint);
+}
+
+.spark-val {
+    font: 300 1.5rem var(--mono);
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    margin-bottom: 0.35rem;
+}
+
+.spark-val small {
+    font-size: 0.72rem;
+    color: var(--muted);
+}
+
+.spark-val.cool {
+    color: var(--sp-ok);
+    font-size: 1.3rem;
+}
+
+.spark-segs {
+    display: flex;
+    gap: 2px;
+    height: 10px;
+    margin-bottom: 0.55rem;
+}
+
+.spark-segs span {
+    flex: 1;
+    background: var(--card-2);
+    border-radius: 1px;
+}
+
+.spark-segs span.on {
+    background: var(--sp-acc);
+}
+
+.spark-trio {
+    display: flex;
+    gap: 1.1rem;
+    margin: 0.55rem 0;
+}
+
+.spark-trio > div {
+    flex: 1;
+    min-width: 0;
+}
+
+.spark-n {
+    font: 500 0.9rem var(--mono);
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+
+.spark-n.ok {
+    color: var(--sp-ok);
+}
+
+.spark-t {
+    font: 0.6rem var(--mono);
+    color: var(--muted);
+    margin: 0.1rem 0 0.25rem;
+}
+
+.spark-mb {
+    height: 3px;
+    border-radius: 2px;
+    background: var(--card-2);
+    overflow: hidden;
+}
+
+.spark-mb > div {
+    height: 100%;
+    background: var(--sp-acc);
+}
+
+.spark-model {
+    font: 500 0.8rem var(--mono);
+    color: var(--text);
+    overflow-wrap: anywhere;
+}
+
+.spark-model.down {
+    color: var(--faint);
+}
+
+.spark-chartbox {
+    margin-top: 0.5rem;
+}
+
+.spark-chart {
+    display: block;
+    width: 100%;
+}
+
+.spark-ar {
+    fill: var(--sp-acc);
+    opacity: 0.12;
+}
+
+.spark-ln {
+    fill: none;
+    stroke: var(--sp-acc);
+    stroke-width: 1.4;
+}
+
+.spark-dt {
+    fill: var(--sp-acc);
+}
+
+.spark-lt {
+    margin-top: 1.2rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--line);
+}
+
+.spark-lt-hero {
+    font: 300 1.7rem var(--mono);
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+
+.spark-lt-hero .spark-unit {
+    display: block;
+    margin: 0 0 0.5rem;
+}
+
+.spark-lt-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.6rem 1rem;
+    margin: 0.7rem 0;
+}
+
+.spark-lt-cell .spark-n {
+    font-size: 1rem;
+}
+
+.spark-foot {
+    margin-top: 1rem;
+    padding-top: 0.6rem;
+    border-top: 1px solid var(--line);
+    font: 0.62rem var(--mono);
+    color: var(--faint);
+}
+
+@media (min-width: 1100px) {
+    .layout.sparked .spark-panel {
+        position: relative;
+        inset: auto;
+        z-index: auto;
+        flex: 0 0 var(--spark-w, 46%);
+        max-width: calc(100% - 440px);
+        height: 100dvh;
+        border-left: 1px solid var(--line);
+        animation-delay: 90ms;
+    }
+
+    :root[data-tiling="on"] .layout.sparked .spark-panel {
+        height: auto;
+    }
+}
+
+@media (max-width: 1099px) {
+    :root .layout > .spark.window {
+        animation: push-in 0.36s var(--ease-out);
+    }
+
+    :root .layout > .spark.window.leaving {
+        animation: push-out 0.24s var(--ease-in-out) forwards;
+    }
+}
