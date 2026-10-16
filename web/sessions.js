@@ -9,9 +9,9 @@ import {
     actions,
     canSteer,
     collab,
-    isUnread,
     navigate,
     notify,
+    isUnread,
     openSheet,
     scoped,
     sessionUnread,
@@ -276,8 +276,7 @@ function SessionRow({
     // Subagents at work, or failed ones nobody dealt with, but not over a call waiting for you: that says more.
     const fork = !session.waiting && (live > 0 || failed > 0);
     const person = collab() ? (session.people ?? []).find((each) => each.id !== me?.id) : undefined;
-    // Archive and pin show on hover; an archived session only comes back, and only for people who steer.
-    // Live rows hold archive, pin, and mark-unread; an archived one keeps only its unarchive.
+    // Archive, pin, and mark-unread show on hover; an archived session only comes back, and only for people who steer.
     const acts = (canSteer() ? 1 : 0) + (session.archived ? 0 : 2);
 
     return html`<div

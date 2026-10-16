@@ -15,9 +15,9 @@ function Section({ tint, title, children }) {
     </section>`;
 }
 
-/** A semicircle gauge: one arc for the average speed, a hairline one for the latest response. */
-function Speedometer({ avg, latest, samples }) {
-    const top = Math.max(150, Math.ceil(Math.max(avg ?? 0, latest ?? 0) / 50) * 50);
+/** A semicircle gauge: the speed of the newest response. */
+function Speedometer({ latest }) {
+    const top = Math.max(150, Math.ceil((latest ?? 0) / 50) * 50);
     const r = 52;
     const len = Math.PI * r;
     const arc = (fraction, width, color, cap = "round") =>
@@ -30,11 +30,10 @@ function Speedometer({ avg, latest, samples }) {
             stroke-dasharray=${`${(fraction ?? 0) * len} ${len}`}
         />`;
 
-    return html`<svg class="gauge" viewBox="0 0 120 74" role="img" aria-label=${`Speed ${avg ?? 0} tokens per second`}>
+    return html`<svg class="gauge" viewBox="0 0 120 74" role="img" aria-label=${`Speed ${latest ?? 0} tokens per second`}>
         ${arc(1, 10, "var(--line)", "butt")}
-        ${latest !== undefined && arc(latest / top, 10, "var(--accent-soft)")}
-        ${arc((avg ?? 0) / top, 10, "var(--spark)")}
-        <text x="60" y="48" text-anchor="middle" class="gauge-value">${avg !== undefined ? avg.toFixed(1) : "—"}</text>
+        ${arc((latest ?? 0) / top, 10, "var(--spark)")}
+        <text x="60" y="48" text-anchor="middle" class="gauge-value">${latest !== undefined ? latest.toFixed(1) : "—"}</text>
         <text x="60" y="62" text-anchor="middle" class="gauge-unit">tok/s</text>
         <text x="8" y="73" class="gauge-scale">0</text>
         <text x="112" y="73" text-anchor="end" class="gauge-scale">${top}</text>
@@ -45,8 +44,10 @@ function Speedometer({ avg, latest, samples }) {
 function ContextBar({ stats }) {
     const agent = store.state.view.agent;
     const window = agent?.contextWindow;
-    const last = stats.lastPrompt ?? { input: 0, cacheRead: 0, cacheWrite: 0 };
-    const prompted = last.input + last.cacheRead + last.cacheWrite;
+    // The window's fill from the newest response's own total; the cached share from its cache rate.
+    const prompted = stats.contextTokens ?? 0;
+    const cached = stats.cacheRate !== undefined ? prompted * stats.cacheRate : 0;
+    const fresh = prompted - cached;
     const pct = (n) => (window ? Math.min(100, (n / window) * 100) : 0);
     const seg = (n, color, title) =>
         html`<div class="ctx-seg" style=${`width:${pct(n)}%; background:${color}`} title=${title}></div>`;
@@ -58,15 +59,13 @@ function ContextBar({ stats }) {
                 : "No context window known"}
         </div>
         <div class="ctx-bar">
-            ${seg(last.cacheRead, "var(--ok)", "Cache read")}
-            ${seg(last.cacheWrite, "var(--warn)", "Cache write")}
-            ${seg(last.input, "var(--accent)", "Fresh input")}
+            ${seg(cached, "var(--ok)", "Cached")}
+            ${seg(fresh, "var(--accent)", "Fresh input")}
             ${seg(window ? Math.max(0, window - prompted) : 0, "var(--card-2)", "Free")}
         </div>
         <div class="ctx-legend mono">
-            <span><i class="dot" style=${"background:var(--ok)"}></i>${formatTokens(last.cacheRead)} cached</span>
-            <span><i class="dot" style=${"background:var(--warn)"}></i>${formatTokens(last.cacheWrite)} written</span>
-            <span><i class="dot" style=${"background:var(--accent)"}></i>${formatTokens(last.input)} fresh</span>
+            <span><i class="dot" style=${"background:var(--ok)"}></i>${formatTokens(cached)} cached</span>
+            <span><i class="dot" style=${"background:var(--accent)"}></i>${formatTokens(fresh)} fresh</span>
             <span><i class="dot" style=${"background:var(--card-2)"}></i>free</span>
         </div>
     </div>`;
@@ -78,17 +77,17 @@ function ContextOverview({ insights }) {
 
     return html`<div class="context-row">
         <div class="gauge-block">
-            <${Speedometer} avg=${stats.avgTokensPerSec} latest=${stats.tokensPerSec} />
+            <${Speedometer} latest=${stats.tokensPerSec} />
             <div class="gauge-caption">
                 ${hasSpeed
-                    ? html`avg of last ${stats.avgSamples ?? 1} · latest <b>${stats.tokensPerSec.toFixed(1)}</b>`
+                    ? html`newest answer <b>${stats.tokensPerSec.toFixed(1)}</b> tok/s`
                     : "waiting for a response"}
             </div>
         </div>
         <${ContextBar} stats=${stats} />
     </div>
     <div class="mini-stats mono">
-        <span title="Time to first token">⏱ ${(stats.avgTtftMs / 1000).toFixed(1)}s avg to first token</span>
+        <span title="Time to first token">⏱ ${stats.ttftMs !== undefined ? `${(stats.ttftMs / 1000).toFixed(1)}s to first token` : "no first token yet"}</span>
         <span title="Cache hit rate">✦ ${Math.round((stats.cacheRate ?? 0) * 100)}% cache hit</span>
         <span title="Session spend">¤ $${(store.state.view.conversation?.spend?.spent ?? stats.cost ?? 0).toFixed(2)}</span>
     </div>`;

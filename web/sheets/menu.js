@@ -14,6 +14,7 @@ import {
     canSteer,
     closeSheet,
     collab,
+    navigate,
     notify,
     openSheet,
     scoped,
