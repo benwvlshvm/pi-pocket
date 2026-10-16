@@ -23,6 +23,8 @@ import type { User } from "../config.ts";
 import { HttpError } from "../errors.ts";
 import { desktopTheme, wallpaperFile } from "../omarchy.ts";
 import { runningNow } from "../running.ts";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { DshGoalDoc } from "../dsh-goal.ts";
 import { sparkStatus } from "../spark.ts";
 import { serveImage } from "./assets.ts";
 import { browserRoutes } from "./browser-routes.ts";
@@ -218,6 +220,65 @@ export function createApi(options: HttpOptions, auth: Auth) {
                 body.ids.slice(0, MAX_PEEKS).map((id) => conversationId(String(id))),
                 body.seq as number | undefined,
             );
+
+            return json(response, 200, { ok: true });
+        }
+
+        // Goal mode's bar: pause, resume, edit, or clear the session's goal (the drop-in's driver does the rest).
+        if (first === "dsh-goal" && second === undefined && method === "POST") {
+            const body = await readJson<{
+                c?: unknown;
+                action?: unknown;
+                objective?: unknown;
+            }>(request);
+            const action = String(body.action ?? "");
+
+            if (!["pause", "resume", "clear", "edit"].includes(action)) {
+                throw new HttpError(400, "action must be pause, resume, clear, or edit");
+            }
+
+            app.requireSteer(user);
+
+            const goalConversation = conversationId(String(body.c));
+
+            await app.harness.commit(async (tx) => {
+                const doc = await tx.doc(DshGoalDoc, goalConversation);
+
+                if (action === "clear") {
+                    doc.goal = undefined;
+
+                    return;
+                }
+
+                const goal = doc.goal;
+
+                if (goal === undefined) {
+                    return;
+                }
+
+                if (action === "pause") {
+                    doc.goal = { ...goal, phase: "paused", revision: goal.revision + 1 };
+                } else if (action === "resume") {
+                    doc.goal = {
+                        ...goal,
+                        phase: "active",
+                        blockedStreak: 0,
+                        revision: goal.revision + 1,
+                    };
+                } else if (action === "edit") {
+                    const objective = String(body.objective ?? "").trim();
+
+                    if (objective === "") {
+                        throw new HttpError(400, "the objective cannot be empty");
+                    }
+
+                    doc.goal = {
+                        ...goal,
+                        objective: objective.slice(0, 300),
+                        revision: goal.revision + 1,
+                    };
+                }
+            }, BACKGROUND_CONTEXT);
 
             return json(response, 200, { ok: true });
         }

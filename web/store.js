@@ -48,6 +48,7 @@ const emptyView = () => ({
     clients: 0,
     viewers: [],
     approvals: [],
+    questions: [],
     artifacts: [],
     subagents: [],
     authors: {},
@@ -57,6 +58,7 @@ const emptyView = () => ({
     decisions: {},
     plan: { on: false },
     schedules: [],
+    dshGoal: null,
     goal: null,
     watch: null,
     branch: null,
@@ -413,6 +415,7 @@ function mergeView(current, data) {
         clients: data.clients,
         viewers: data.viewers,
         approvals: data.approvals,
+        questions: data.questions ?? base.questions,
         // The server sends these again only when they change: a missing one keeps its last value.
         artifacts: data.artifacts ?? base.artifacts,
         subagents: data.subagents ?? base.subagents,
@@ -427,6 +430,8 @@ function mergeView(current, data) {
         goal: data.goal === undefined ? base.goal : data.goal,
         // The session's PR watch, or null: the same.
         watch: data.watch === undefined ? base.watch : data.watch,
+        // The goal-mode bar's state, or null: the same.
+        dshGoal: data.dshGoal === undefined ? base.dshGoal : data.dshGoal,
         // Why subagents' reports wait (a spend limit), or null when none do: the subagents bar says it.
         subagentsHeld: data.subagentsHeld === undefined ? base.subagentsHeld : data.subagentsHeld,
         // What the folder has checked out: `{ branch }` or `{ detached }`, and null outside a repository.

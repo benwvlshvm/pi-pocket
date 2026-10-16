@@ -43,6 +43,7 @@ import {
     TurnsDoc,
     WatchDoc,
 } from "./docs.ts";
+import { DshGoalDoc, type DshGoal } from "./dsh-goal.ts";
 import { SHELL_ENTRY } from "./entry-format.ts";
 import { agentInfo } from "./models.ts";
 import {
@@ -74,6 +75,7 @@ export const ROOM_DOCS = new Set(
         ScheduleDoc,
         GoalDoc,
         WatchDoc,
+        DshGoalDoc,
     ].map((doc) => doc.definition.kind),
 );
 /** A typing indicator lasts this long unless the browser renews it. */
@@ -243,6 +245,7 @@ export class Room {
     schedules: Record<string, Schedule> = {};
     goal: Goal | undefined;
     watch: PrWatch | undefined;
+    dshGoal: DshGoal | undefined;
     /** Who is typing where, by user id. Memory only: it means nothing after a restart. */
     readonly #typing = new Map<string, { where: TypingPlace; timer: NodeJS.Timeout }>();
     parent: { id: ConversationId; title: string } | undefined;
@@ -297,6 +300,7 @@ export class Room {
         };
         this.goal = (await harness.snapshot(GoalDoc, this.id, context))?.goal;
         this.watch = (await harness.snapshot(WatchDoc, this.id, context))?.watch;
+        this.dshGoal = (await harness.snapshot(DshGoalDoc, this.id, context))?.goal;
 
         if (owner !== undefined) {
             const siblings =
@@ -368,6 +372,8 @@ export class Room {
             this.goal = (value?.goal as Goal | undefined) ?? undefined;
         } else if (kind === WatchDoc.definition.kind) {
             this.watch = (value?.watch as PrWatch | undefined) ?? undefined;
+        } else if (kind === DshGoalDoc.definition.kind) {
+            this.dshGoal = (value?.goal as DshGoal | undefined) ?? undefined;
         }
 
         if (kind === AuthorsDoc.definition.kind) {
@@ -518,6 +524,8 @@ export class Room {
                           max: this.goal.max,
                           ...(this.goal.last === undefined ? {} : { last: this.goal.last }),
                       },
+            // The goal-mode bar's state, from the `goal` drop-in's document.
+            dshGoal: this.dshGoal ?? null,
             // The session's PR watch, as its bar shows it.
             watch:
                 this.watch === undefined

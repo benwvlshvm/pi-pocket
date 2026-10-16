@@ -176,6 +176,21 @@ function sheetBody(sheet) {
                 submit=${(value) => actions.updateSession(view.conversation.id, { title: value })}
             />`;
             break;
+        case "dsh-goal-edit":
+            body = store.state.view.dshGoal
+                ? html`<${TextSheet}
+                      title="Edit goal"
+                      label="Objective"
+                      initial=${store.state.view.dshGoal.objective}
+                      submit=${(value) =>
+                          api("dsh-goal", {
+                              c: String(store.state.conversationId),
+                              action: "edit",
+                              objective: value,
+                          })}
+                  />`
+                : null;
+            break;
         case "worktree":
             body = html`<${WorktreeSheet} />`;
             break;

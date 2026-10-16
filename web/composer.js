@@ -14,6 +14,7 @@ import { loadFiles, mentionAt, mentionText, suggestFiles } from "./files.js";
 import { remember, searchHistory, sentHistory } from "./history.js";
 import {
     actions,
+    api,
     attempt,
     canSteer,
     collab,
@@ -262,6 +263,53 @@ function PlanBar({ blocked }) {
 }
 
 /** Done when: the check Pi works toward, how many checks it took, and a way to drop it. */
+/** The goal-mode bar: the `goal` drop-in's armed objective, with pause, edit, and clear at a thumb's reach. */
+function DshGoalBar() {
+    const { dshGoal } = store.state.view;
+
+    if (!dshGoal) {
+        return null;
+    }
+
+    const progress = html`<span class="mono"> · round ${dshGoal.round} of ${dshGoal.max}</span>`;
+    const text =
+        dshGoal.phase === "active"
+            ? html`<strong>Goal</strong> ${dshGoal.objective}${progress}`
+            : dshGoal.phase === "paused"
+              ? html`<strong>Goal paused:</strong> ${dshGoal.objective}`
+              : dshGoal.phase === "blocked"
+                ? html`<strong>Goal blocked:</strong> ${dshGoal.blocker ?? dshGoal.objective}${progress}`
+                : html`<strong>Goal complete:</strong> ${dshGoal.objective}`;
+    const conversation = String(store.state.conversationId);
+    const act = (action, extra = {}) =>
+        attempt(() => api("dsh-goal", { c: conversation, action, ...extra }));
+
+    return html`<div class=${`goal-bar dsh ${dshGoal.phase}`}>
+        <span class="grow">${text}</span>
+        ${
+            canSteer() &&
+            html`<button
+                class="link small"
+                onClick=${() => act(dshGoal.phase === "active" ? "pause" : "resume")}
+            >
+                ${dshGoal.phase === "active" ? "Pause" : "Resume"}
+            </button>
+            <button class="link small" onClick=${() => openSheet({ type: "dsh-goal-edit" })}>Edit</button>
+            <button
+                class="link small"
+                onClick=${() =>
+                    act("clear").then(() => {
+                        if (dshGoal.phase !== "complete" && dshGoal.phase !== "blocked") {
+                            notify("info", "Goal cleared.");
+                        }
+                    })}
+            >
+                ${dshGoal.phase === "complete" || dshGoal.phase === "blocked" ? "Dismiss" : "Clear"}
+            </button>`
+        }
+    </div>`;
+}
+
 function GoalBar() {
     const { goal } = store.state.view;
 
@@ -1034,6 +1082,7 @@ export function Composer() {
             ${collab() && html`<${DriverBar} />`}
             <${PlanBar} blocked=${blocked} />
             <${GoalBar} />
+            <${DshGoalBar} />
             <${WatchBar} />
             <${SubagentsBar} />
             <${TrustBar} />
