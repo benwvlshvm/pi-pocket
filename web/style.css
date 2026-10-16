@@ -2678,6 +2678,16 @@ button.chip:hover {
     color: var(--warn);
 }
 
+/* The Spark cluster's chip: quiet like the rest of the line, dimmed when the dashboard is out of reach, and shortened
+   to its watts when the line is narrow (the `spark` step of the status line's shortening). */
+.status-line .spark.offline {
+    opacity: 0.6;
+}
+
+.status-line[data-short~="spark"] .spark .rest {
+    display: none;
+}
+
 /* How fast the last answer came, once Appearance turns it on: its two halves spaced like the line's items. */
 .status-line .speed {
     display: inline-flex;
@@ -9584,7 +9594,6 @@ textarea.notes {
     flex-direction: column;
     gap: 0.15rem;
 }
-
 
 /* The /context and /skills sheet: stat cards in the theme's hues, sections barred like the TUI panel's. */
 .insights {

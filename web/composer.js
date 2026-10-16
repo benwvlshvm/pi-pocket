@@ -1422,7 +1422,7 @@ function PlacesButton() {
  * gaps, no "1 here" while you are alone, the guard's and the context's labels, then the cache, then the wait for the
  * first token.
  */
-const SHORTER = ["words", "here", "guard", "context", "cache", "wait"];
+const SHORTER = ["words", "here", "spark", "guard", "context", "cache", "wait"];
 /** What each status line was last fitted for: the text size and its text. Its width is the observer's to watch. */
 const fitted = new WeakMap();
 
@@ -1500,6 +1500,67 @@ function useStatusFit(ref) {
 
 /** Seconds, as the status line says them: 0.4s, 3.2s, 14s. */
 const seconds = (ms) => (ms >= 10_000 ? `${Math.round(ms / 1000)}s` : `${(ms / 1000).toFixed(1)}s`);
+
+/**
+ * The DGX Spark cluster's chip: "49W · 77° · 96%" for node 1, both nodes in the title, fresh every 5s while the tab
+ * is up, and greyed when the dashboard is out of reach. Like Hermes's bottom widget: quiet, mono, no accents.
+ */
+function SparkPart() {
+    const [spark, setSpark] = useState(undefined);
+
+    useEffect(() => {
+        let gone = false;
+        let timer;
+
+        const tick = async () => {
+            if (document.hidden === false) {
+                try {
+                    const response = await fetch("/api/spark");
+                    const data = response.ok ? await response.json() : null;
+
+                    if (!gone) {
+                        setSpark(data && data.error === undefined ? data : null);
+                    }
+                } catch {
+                    if (!gone) {
+                        setSpark(null);
+                    }
+                }
+            }
+
+            if (!gone) {
+                timer = setTimeout(tick, 5000);
+            }
+        };
+
+        tick();
+
+        return () => {
+            gone = true;
+            clearTimeout(timer);
+        };
+    }, []);
+
+    if (spark === undefined) {
+        return null;
+    }
+
+    if (spark === null) {
+        return html`<span class="spark offline" title="The DGX Spark dashboard is unreachable">dgx-offline</span>`;
+    }
+
+    const peer = spark.peer_host
+        ? `node2 ${Math.round(spark.peer_power_w)}W ${Math.round(spark.peer_gpu_temp)}° ${Math.round(spark.peer_gpu_util)}%`
+        : "node2 offline";
+
+    return html`<span
+        class="spark"
+        title=${`DGX Sparks: ${Math.round(spark.power_w)}W ${Math.round(spark.gpu_temp)}° ${Math.round(spark.gpu_util)}% · ${peer}`}
+    >
+        ${Math.round(spark.power_w)}W
+        <span class="rest"> · ${Math.round(spark.gpu_temp)}° · ${Math.round(spark.gpu_util)}%</span>
+    </span>`;
+}
 
 /**
  * How fast the newest answer came, once Appearance turns it on: its tokens a second, and how long its first token
@@ -1598,6 +1659,9 @@ function StatusLine() {
     if (stats.cacheRate !== undefined) {
         parts.push(html`<span class="cache">cache ${Math.round(stats.cacheRate * 100)}%</span>`);
     }
+
+    // The Spark cluster's chip, before the spend so money stays at the line's end.
+    parts.push(html`<${SparkPart} />`);
 
     // The session's spend, its subagents' included, and its limit when it has one.
     const spend = view.conversation?.spend;
